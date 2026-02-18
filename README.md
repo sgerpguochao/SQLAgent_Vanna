@@ -158,8 +158,13 @@ npm run dev
 
 ## 开源协议
 
-MIT License
+**非商业使用许可证**
+版权所有 (c) 2026 sgerpguochao
+
+本项目仅限个人学习、研究和教育目的使用，禁止用于任何商业用途。
+
+详细内容请查看 [LICENSE](./LICENSE) 文件。
 
 ## 联系方式
 
-- GitHub: https://github.com/fufankeji/SQLAgent
+- GitHub: https://github.com/sgerpguochao/SQLAgent_Vanna
