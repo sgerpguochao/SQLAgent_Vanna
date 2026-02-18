@@ -462,7 +462,22 @@ async def chat_stream(request: ChatRequest):
                 df = get_last_query_result()
                 if df is not None and len(df) > 0:
                     # 将 DataFrame 转换为 JSON 格式（list of dicts）
+                    # 处理 Decimal 类型，确保 JSON 序列化
+                    import decimal
+                    
+                    def convert_decimal(obj):
+                        """将 Decimal 转换为 float 或 string"""
+                        if isinstance(obj, decimal.Decimal):
+                            return float(obj)
+                        elif isinstance(obj, dict):
+                            return {k: convert_decimal(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [convert_decimal(item) for item in obj]
+                        return obj
+                    
                     query_data = df.to_dict('records')
+                    query_data = [convert_decimal(record) for record in query_data]
+                    
                     logger.info(f"[Data Extraction] Retrieved query data from cache, rows: {len(query_data)}")
                     # 清空缓存，避免下次查询获取到旧数据
                     clear_last_query_result()
