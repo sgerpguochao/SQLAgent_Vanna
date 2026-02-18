@@ -45,5 +45,4 @@ Thumbs.db
 *.ipynb
 
 # Exclude specific directories
-frontend/
 local_embedding/
