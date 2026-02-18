@@ -68,7 +68,7 @@ pip install -r requirements.txt
 
 ```env
 # OpenAI 兼容接口的 API Key
-API_KEY=sk-afad3ac228864107912220d8076be356
+API_KEY=your-api-key
 BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL=qwen3-coder-plus
 
@@ -97,7 +97,7 @@ MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_DATABASE=ai_sales_data
 MYSQL_USER=root
-MYSQL_PASSWORD=csd123456
+MYSQL_PASSWORD=your-mysql-password
 ```
 
 **Step 6. 启动后端服务**
@@ -484,7 +484,7 @@ MySQL 是本项目的结构化数据存储引擎，用于存储业务数据。
 | Port | 3306 |
 | Database | ai_sales_data |
 | User | root |
-| Password | csd123456 |
+| Password | your-password |
 
 ### 5.2 数据库表结构
 
@@ -502,7 +502,7 @@ MySQL 是本项目的结构化数据存储引擎，用于存储业务数据。
 **命令行测试**
 
 ```bash
-mysql -h localhost -P 3306 -u root -pcsd123456 -e "SELECT 1;"
+mysql -h localhost -P 3306 -u root -pyour-password -e "SELECT 1;"
 ```
 
 **使用测试脚本**
@@ -549,7 +549,7 @@ User: root
 
 ```bash
 # 连接数据库
-mysql -h localhost -P 3306 -u root -pcsd123456 ai_sales_data
+mysql -h localhost -P 3306 -u root -pyour-password ai_sales_data
 
 # 查看所有表
 SHOW TABLES;
