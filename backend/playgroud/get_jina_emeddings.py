@@ -2,7 +2,7 @@ import requests
 import json
 
 # API 端点
-url = "http://117.50.174.50:8898/v1/embeddings"
+url = "http://localhost:8898/v1/embeddings"
 
 # 请求数据
 payload = {
