@@ -32,50 +32,63 @@
 
 ### 环境要求
 
-- Python 3.11+
+- Python 3.13.5
 - Node.js 18+
 - MySQL 8.0+
-- Milvus 2.3+
+- Milvus 2.4+
+- Conda (Miniconda/Anaconda)
 
-### 后端配置
+### 一键启动（推荐）
 
-1. 进入后端目录：
+```bash
+# 启动所有服务
+./start_all.sh
+
+# 停止所有服务
+./stop_all.sh
+```
+
+### 手动启动
+
+#### 1. 启动中间件服务
+
+**Jina Embedding 服务**
+```bash
+cd local_embedding
+conda activate jina_run
+MODEL_DIR=./jina-embeddings-v4-vllm-retrieval python -m uvicorn app_jina_embedding_v4:app --host 0.0.0.0 --port 8898
+```
+
+**Milvus 服务**
+```bash
+cd milvus-deployment/milvus_server
+./start_milvus.sh
+```
+
+#### 2. 启动后端服务
+
 ```bash
 cd backend/vanna
-```
-
-2. 创建并配置 `.env` 文件（参考 `.env.example`）
-
-3. 安装依赖：
-```bash
-conda create -n vanna python=3.11
-conda activate vanna
-pip install -r requirements.txt
-```
-
-4. 启动后端服务：
-```bash
+conda activate nl2sqlagent
 python api_server.py
 ```
 
-### 前端配置
+#### 3. 启动前端服务
 
-1. 进入前端目录：
 ```bash
 cd frontend
+node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 3000
 ```
 
-2. 安装依赖：
-```bash
-npm install
-```
+### 服务地址
 
-3. 启动开发服务器：
-```bash
-npm run dev
-```
-
-4. 访问 http://localhost:3000
+| 服务 | 地址 |
+|------|------|
+| 前端 | http://localhost:3000 |
+| 后端 API | http://localhost:8100 |
+| API 文档 | http://localhost:8100/docs |
+| Jina Embedding | http://localhost:8898 |
+| Milvus | http://localhost:19530 |
 
 ## 项目结构
 
