@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Plus, Trash2, Download, Upload, Database, RefreshCw, Search, Filter, AlertTriangle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, Download, Upload, Database, RefreshCw, Search, Filter, AlertTriangle, FileArchive, Lock, X, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Input } from './ui/input';
@@ -73,6 +73,18 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
   const [databaseList, setDatabaseList] = useState<string[]>([]);
   const [selectedDbName, setSelectedDbName] = useState<string>('');
 
+  // 导入相关状态
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [importDbName, setImportDbName] = useState<string>('');
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [clearBeforeImport, setClearBeforeImport] = useState<boolean>(true);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<string>('');
+  const [countdown, setCountdown] = useState<number>(0);
+  const [importResult, setImportResult] = useState<{success: boolean; message: string; summary?: any} | null>(null);
+  const [fileError, setFileError] = useState<string>('');
+  const [dbError, setDbError] = useState<string>('');
+
   // 添加表单状态
   const [dataType, setDataType] = useState<'documentation' | 'ddl' | 'sql' | 'plan'>('sql');
   const [content, setContent] = useState('');
@@ -80,17 +92,34 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
   const [tableName, setTableName] = useState('');
   const [tables, setTables] = useState('');
 
-  // 加载训练数据
+  // 加载训练数据（分页获取所有数据）
   const loadTrainingData = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(getApiUrl(API_ENDPOINTS.TRAINING_GET));
-      const data = await response.json();
-
-      if (data.success && data.data) {
-        setTrainingData(data.data);
-        toast.success(`加载了 ${data.data.length} 条训练数据`);
+      let allData: TrainingData[] = [];
+      let offset = 0;
+      const batchSize = 500;
+      
+      // 分页获取所有数据
+      while (true) {
+        const response = await fetch(getApiUrl(API_ENDPOINTS.TRAINING_GET) + `?limit=${batchSize}&offset=${offset}`);
+        const data = await response.json();
+        
+        if (data.success && data.data && data.data.length > 0) {
+          allData = [...allData, ...data.data];
+          // 如果返回数据少于batchSize，说明已经获取完毕
+          if (data.data.length < batchSize) {
+            break;
+          }
+          offset += batchSize;
+        } else {
+          break;
+        }
       }
+      
+      
+      setTrainingData(allData);
+      toast.success(`加载了 ${allData.length} 条训练数据`);
     } catch (error) {
       console.error('加载训练数据失败:', error);
       toast.error('加载训练数据失败');
@@ -213,6 +242,138 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
     }
   };
 
+  // 打开导入弹窗
+  const openImportDialog = () => {
+    setImportDbName(selectedDbName || (databaseList.length > 0 ? databaseList[0] : ''));
+    setImportFile(null);
+    setClearBeforeImport(true);
+    setImportResult(null);
+    setFileError('');
+    setDbError('');
+    setImportProgress('');
+    setShowImportDialog(true);
+  };
+
+  // 验证导入表单
+  const validateImportForm = (): boolean => {
+    let isValid = true;
+    
+    // 验证数据库选择
+    if (!importDbName) {
+      setDbError('请选择数据库');
+      isValid = false;
+    } else {
+      setDbError('');
+    }
+    
+    // 验证文件选择
+    if (!importFile) {
+      setFileError('请选择要上传的ZIP文件');
+      isValid = false;
+    } else if (!importFile.name.toLowerCase().endsWith('.zip')) {
+      setFileError('只支持.zip格式的文件');
+      isValid = false;
+    } else {
+      setFileError('');
+    }
+    
+    return isValid;
+  };
+
+  // 处理文件选择
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (!file.name.toLowerCase().endsWith('.zip')) {
+        setFileError('只支持.zip格式的文件');
+        setImportFile(null);
+      } else if (file.size > 50 * 1024 * 1024) {
+        setFileError('文件大小不能超过50MB');
+        setImportFile(null);
+      } else {
+        setFileError('');
+        setImportFile(file);
+      }
+    }
+  };
+
+  // 执行导入
+  const handleImport = async () => {
+    if (!validateImportForm()) {
+      return;
+    }
+
+    setIsImporting(true);
+    setImportProgress('正在上传并导入...');
+    setImportResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile!);
+      formData.append('db_name', importDbName);
+      formData.append('clear_before_import', clearBeforeImport.toString());
+
+      const response = await fetch(getApiUrl(API_ENDPOINTS.TRAINING_IMPORT), {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setImportResult({
+          success: true,
+          message: data.message,
+          summary: data.import_summary
+        });
+        setImportProgress('');
+        toast.success(data.message || '导入成功');
+        // 刷新数据
+        loadTrainingData();
+        
+        // 成功后5秒自动关闭弹窗
+        setCountdown(5);
+        const timer = setInterval(() => {
+          setCountdown(prev => {
+            if (prev <= 1) {
+              clearInterval(timer);
+              closeImportDialog();
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+      } else {
+        setImportResult({
+          success: false,
+          message: data.detail || data.message || '导入失败'
+        });
+        setImportProgress('');
+        toast.error(data.detail || data.message || '导入失败');
+      }
+    } catch (error) {
+      console.error('导入失败:', error);
+      setImportResult({
+        success: false,
+        message: '导入失败: ' + (error as Error).message
+      });
+      setImportProgress('');
+      toast.error('导入失败');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  // 关闭导入弹窗
+  const closeImportDialog = () => {
+    if (!isImporting) {
+      setShowImportDialog(false);
+      setImportFile(null);
+      setImportResult(null);
+      setCountdown(0);
+    }
+  };
+
   // 使用示例模板
   const useTemplate = () => {
     if (dataType === 'plan') {
@@ -296,6 +457,15 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
             >
               <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
               刷新
+            </Button>
+            <Button
+              onClick={openImportDialog}
+              size="sm"
+              variant="outline"
+              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+            >
+              <FileArchive className="w-4 h-4 mr-2" />
+              批量导入
             </Button>
             <Button
               onClick={() => setShowAddForm(!showAddForm)}
@@ -633,6 +803,217 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Import Dialog */}
+      <Dialog open={showImportDialog} onOpenChange={closeImportDialog}>
+        <DialogContent className="bg-[#0F1123] border-purple-500/30 max-w-lg">
+          <DialogHeader>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-12 h-12 rounded-full bg-purple-500/10 border border-purple-500/30 flex items-center justify-center">
+                <FileArchive className="w-6 h-6 text-purple-400" />
+              </div>
+              <DialogTitle className="text-xl text-gray-100">批量导入训练数据</DialogTitle>
+            </div>
+            <DialogDescription className="text-gray-400 text-sm">
+              上传ZIP压缩包，包含 ddl.jsonl、sql_parse.jsonl、doc.jsonl、plan.jsonl 四个文件
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* 数据库选择 */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-300">
+                选择数据库 <span className="text-red-400">*</span>
+              </label>
+              {databaseList.length > 0 ? (
+                <Select value={importDbName} onValueChange={setImportDbName} disabled={isImporting}>
+                  <SelectTrigger className={`bg-[#0A0B1E] border-white/10 text-gray-300 ${dbError ? 'border-red-500' : ''}`}>
+                    <SelectValue placeholder="选择数据库" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {databaseList.map((db) => (
+                      <SelectItem key={db} value={db}>
+                        {db}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                  <span className="text-red-400 text-sm">无可用数据库，请先连接数据库</span>
+                </div>
+              )}
+              {dbError && <p className="text-red-400 text-xs">{dbError}</p>}
+            </div>
+
+            {/* 文件上传 */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-300">
+                选择ZIP文件 <span className="text-red-400">*</span>
+              </label>
+              <div className={`border-2 border-dashed rounded-lg p-4 text-center transition-colors ${
+                fileError 
+                  ? 'border-red-500 bg-red-500/5' 
+                  : importFile 
+                    ? 'border-purple-500 bg-purple-500/5' 
+                    : 'border-white/10 hover:border-purple-500/30'
+              }`}>
+                {importFile ? (
+                  <div className="flex items-center justify-center gap-2">
+                    <FileArchive className="w-5 h-5 text-purple-400" />
+                    <span className="text-gray-300 text-sm">{importFile.name}</span>
+                    <span className="text-gray-500 text-xs">({(importFile.size / 1024).toFixed(1)} KB)</span>
+                    {!isImporting && (
+                      <button
+                        onClick={() => setImportFile(null)}
+                        className="ml-2 text-gray-400 hover:text-gray-200"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <label className="cursor-pointer">
+                    <input
+                      type="file"
+                      accept=".zip"
+                      onChange={handleFileChange}
+                      disabled={isImporting}
+                      className="hidden"
+                    />
+                    <div className="py-4">
+                      <Upload className="w-8 h-8 text-gray-500 mx-auto mb-2" />
+                      <p className="text-gray-400 text-sm">点击选择或拖拽ZIP文件</p>
+                      <p className="text-gray-500 text-xs mt-1">支持 .zip 格式，最大 50MB</p>
+                    </div>
+                  </label>
+                )}
+              </div>
+              {fileError && <p className="text-red-400 text-xs">{fileError}</p>}
+            </div>
+
+            {/* 清理选项 */}
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="clearBeforeImport"
+                checked={clearBeforeImport}
+                onChange={(e) => setClearBeforeImport(e.target.checked)}
+                disabled={isImporting}
+                className="w-4 h-4 rounded border-white/20 bg-[#0A0B1E] text-purple-500 focus:ring-purple-500"
+              />
+              <label htmlFor="clearBeforeImport" className="text-sm text-gray-300">
+                导入前清理该数据库的现有数据
+              </label>
+            </div>
+
+            {/* 导入进度/结果 */}
+            {isImporting && (
+              <div className="bg-[#13152E] rounded-lg p-4 border border-purple-500/20">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
+                  <span className="text-purple-400 text-sm">{importProgress || '正在导入...'}</span>
+                </div>
+              </div>
+            )}
+
+            {importResult && (
+              <div className={`rounded-lg p-4 border ${
+                importResult.success 
+                  ? 'bg-green-500/10 border-green-500/30' 
+                  : 'bg-red-500/10 border-red-500/30'
+              }`}>
+                <div className="flex items-center gap-2 mb-2">
+                  {importResult.success ? (
+                    <CheckCircle className="w-5 h-5 text-green-400" />
+                  ) : (
+                    <XCircle className="w-5 h-5 text-red-400" />
+                  )}
+                  <span className={importResult.success ? 'text-green-400' : 'text-red-400'}>
+                    {importResult.message}
+                  </span>
+                </div>
+                {importResult.success && importResult.summary && (
+                  <div className="mt-3">
+                    <div className="grid grid-cols-4 gap-2 text-xs mb-3">
+                      <div className="bg-[#0A0B1E] p-2 rounded text-center">
+                        <div className="text-blue-400 font-bold">{importResult.summary.vannasql?.inserted || 0}</div>
+                        <div className="text-gray-500">SQL</div>
+                      </div>
+                      <div className="bg-[#0A0B1E] p-2 rounded text-center">
+                        <div className="text-purple-400 font-bold">{importResult.summary.vannaddl?.inserted || 0}</div>
+                        <div className="text-gray-500">DDL</div>
+                      </div>
+                      <div className="bg-[#0A0B1E] p-2 rounded text-center">
+                        <div className="text-emerald-400 font-bold">{importResult.summary.vannadoc?.inserted || 0}</div>
+                        <div className="text-gray-500">Doc</div>
+                      </div>
+                      <div className="bg-[#0A0B1E] p-2 rounded text-center">
+                        <div className="text-orange-400 font-bold">{importResult.summary.vannaplan?.inserted || 0}</div>
+                        <div className="text-gray-500">Plan</div>
+                      </div>
+                    </div>
+                    {countdown > 0 && (
+                      <div className="text-center text-xs text-gray-500">
+                        窗口将在 <span className="text-purple-400 font-bold">{countdown}</span> 秒后自动关闭
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={closeImportDialog}
+              disabled={isImporting}
+              className="border-white/10 text-gray-300"
+            >
+              {isImporting ? '' : '取消'}
+            </Button>
+            <Button
+              onClick={handleImport}
+              disabled={isImporting || !importFile || !importDbName}
+              className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white"
+            >
+              {isImporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  导入中...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-4 h-4 mr-2" />
+                  开始导入
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Loading Overlay */}
+      {isImporting && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-[#0F1123] border border-purple-500/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl shadow-purple-500/20">
+            <div className="text-center">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-500/10 border border-purple-500/30 flex items-center justify-center">
+                <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-100 mb-2">正在导入训练数据</h3>
+              <p className="text-gray-400 text-sm mb-4">{importProgress || '请稍候...'}</p>
+              {importDbName && (
+                <div className="bg-[#13152E] rounded-lg p-3 text-sm">
+                  <span className="text-gray-500">数据库: </span>
+                  <span className="text-purple-400">{importDbName}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

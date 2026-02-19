@@ -5,15 +5,19 @@ NL2SQL FastAPI 服务
 import os
 import time
 import logging
+import zipfile
+import json
+import tempfile
+import shutil
+import asyncio
+import hashlib
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-import asyncio
-import json
 import pandas as pd
 
 # 配置日志
@@ -106,6 +110,17 @@ class DatabaseConnectionResponse(BaseModel):
     message: str
     databases: Optional[List[str]] = None
     tables: Optional[List[Dict[str, Any]]] = None
+
+class ImportDataRequest(BaseModel):
+    """批量导入训练数据请求"""
+    db_name: str = Field(..., description="数据库名称，用于标识导入的数据")
+    clear_before_import: bool = Field(default=True, description="导入前是否清理该数据库的现有数据")
+
+class ImportDataResponse(BaseModel):
+    """批量导入训练数据响应"""
+    success: bool
+    message: str
+    import_summary: Optional[Dict[str, Any]] = None
 
 # ==================== FastAPI 应用（占位,会被 lifespan 覆盖）====================
 
@@ -672,22 +687,24 @@ async def get_training_data(
     try:
         df = vn.get_training_data()
 
-        # 添加 data_type 列，根据数据内容判断
+        # 添加 data_type 列，根据ID后缀判断
         def extract_data_type(row):
-            # 如果有 question 字段且不为空，说明是 SQL 查询
-            if 'question' in row.index and pd.notna(row['question']) and row['question']:
+            id_value = str(row.get('id', ''))
+            if id_value.endswith('-sql'):
                 return 'sql'
-            # 如果 content 包含 CREATE TABLE，说明是 DDL
+            elif id_value.endswith('-ddl'):
+                return 'ddl'
+            elif id_value.endswith('-doc'):
+                return 'documentation'
+            elif id_value.endswith('-plan'):
+                return 'plan'
+            # 备用判断逻辑
+            elif 'question' in row.index and pd.notna(row['question']) and row['question']:
+                return 'sql'
             elif 'content' in row.index and pd.notna(row['content']) and 'CREATE TABLE' in str(row['content']).upper():
                 return 'ddl'
-            # 如果有 tables 字段且不为空，且不是 SQL 类型（question为空），说明是 plan 类型
-            elif 'tables' in row.index and pd.notna(row['tables']) and row['tables']:
-                return 'plan'
-            # 否则判断为文档
-            elif 'content' in row.index and pd.notna(row['content']):
-                return 'documentation'
             else:
-                return 'unknown'
+                return 'documentation'
 
         df['data_type'] = df.apply(extract_data_type, axis=1)
 
@@ -760,6 +777,304 @@ async def delete_training_data(request: DeleteTrainingDataRequest):
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete training data: {str(e)}")
+
+async def _import_training_data_from_zip(zip_path: str, db_name: str, clear_before_import: bool = True) -> Dict[str, Any]:
+    """
+    从ZIP文件批量导入训练数据到Milvus
+    
+    Args:
+        zip_path: ZIP文件路径
+        db_name: 数据库名称，用于标识导入的数据
+        clear_before_import: 是否在导入前清理该数据库的现有数据
+        
+    Returns:
+        Dict: 导入结果摘要
+    """
+    
+    # 预期文件名
+    EXPECTED_FILES = {
+        "ddl.jsonl": "vannaddl",
+        "sql_parse.jsonl": "vannasql", 
+        "doc.jsonl": "vannadoc",
+        "plan.jsonl": "vannaplan"
+    }
+    
+    # 文件到集合的字段映射
+    FIELD_MAPPING = {
+        "ddl.jsonl": {
+            "db_name": "db_name",
+            "table_name": "table_name", 
+            "ddl_doc": "ddl"
+        },
+        "sql_parse.jsonl": {
+            "db_name": "db_name",
+            "question": "text",
+            "sql": "sql",
+            "tables": "tables"
+        },
+        "doc.jsonl": {
+            "db_name": "db_name",
+            "table_name": "table_name",
+            "document": "doc"
+        },
+        "plan.jsonl": {
+            "db_name": "db_name",
+            "topic": "topic",
+            "tables": "tables"
+        }
+    }
+    
+    summary = {
+        "vannaddl": {"parsed": 0, "inserted": 0},
+        "vannasql": {"parsed": 0, "inserted": 0},
+        "vannadoc": {"parsed": 0, "inserted": 0},
+        "vannaplan": {"parsed": 0, "inserted": 0}
+    }
+    
+    # 解压文件到临时目录
+    temp_dir = tempfile.mkdtemp()
+    extract_dir = os.path.join(temp_dir, "extracted")
+    os.makedirs(extract_dir, exist_ok=True)
+    
+    try:
+        # 解压ZIP文件
+        logger.info(f"Extracting ZIP file: {zip_path}")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        
+        # 检查文件
+        extracted_files = os.listdir(extract_dir)
+        logger.info(f"Extracted files: {extracted_files}")
+        
+        missing_files = set(EXPECTED_FILES.keys()) - set(extracted_files)
+        if missing_files:
+            raise ValueError(f"Missing required files in ZIP: {missing_files}")
+        
+        # 如果需要清理现有数据
+        if clear_before_import:
+            logger.info(f"Clearing existing data for db_name: {db_name}")
+            for collection_name in ["vannasql", "vannaddl", "vannadoc", "vannaplan"]:
+                try:
+                    # 分页查询并删除该db_name的所有数据（Milvus limit最大16384）
+                    batch_size = 10000
+                    offset = 0
+                    total_deleted = 0
+                    
+                    while True:
+                        result = vn.milvus_client.query(
+                            collection_name=collection_name,
+                            filter=f'db_name == "{db_name}"',
+                            output_fields=["id"],
+                            limit=batch_size,
+                            offset=offset
+                        )
+                        if not result:
+                            break
+                        
+                        ids_to_delete = [item["id"] for item in result]
+                        vn.milvus_client.delete(collection_name=collection_name, ids=ids_to_delete)
+                        total_deleted += len(ids_to_delete)
+                        
+                        # 如果返回数量小于batch_size，说明已经查询完毕
+                        if len(result) < batch_size:
+                            break
+                        offset += batch_size
+                    
+                    if total_deleted > 0:
+                        logger.info(f"Deleted {total_deleted} records from {collection_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to clear {collection_name}: {e}")
+        
+        # 并行处理四个文件
+        async def process_file(jsonl_filename: str) -> tuple:
+            """异步处理单个jsonl文件"""
+            file_path = os.path.join(extract_dir, jsonl_filename)
+            collection_name = EXPECTED_FILES[jsonl_filename]
+            field_map = FIELD_MAPPING[jsonl_filename]
+            
+            # 读取jsonl文件，支持两种格式：
+            # 1. 标准jsonl格式：每行一个JSON对象
+            # 2. JSON数组格式：整个文件是一个JSON数组
+            records = []
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    pass
+                elif content.startswith('['):
+                    # JSON数组格式
+                    try:
+                        records = json.loads(content)
+                        if not isinstance(records, list):
+                            records = [records]
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse JSON array: {e}")
+                else:
+                    # 标准jsonl格式
+                    for line in content.split('\n'):
+                        line = line.strip()
+                        if line:
+                            try:
+                                record = json.loads(line)
+                                records.append(record)
+                            except json.JSONDecodeError as e:
+                                logger.warning(f"Failed to parse JSON line: {e}")
+            
+            logger.info(f"Parsed {len(records)} records from {jsonl_filename}")
+            summary[collection_name]["parsed"] = len(records)
+            
+            if not records:
+                return collection_name, 0
+            
+            # 提取需要向量化的文本字段
+            text_field = None
+            for src_field, dst_field in field_map.items():
+                if dst_field in ["text", "ddl", "doc", "topic"]:
+                    text_field = src_field
+                    break
+            
+            texts = [record.get(text_field, "") for record in records]
+            
+            # 批量生成向量
+            logger.info(f"Generating embeddings for {len(texts)} records...")
+            embeddings = vn.embedding_function.encode_documents(texts)
+            
+            # 构建插入数据
+            insert_data = []
+            for i, record in enumerate(records):
+                # 生成ID
+                content_hash = hashlib.md5(texts[i].encode('utf-8')).hexdigest()
+                if collection_name == "vannasql":
+                    record_id = content_hash + "-sql"
+                elif collection_name == "vannaddl":
+                    record_id = content_hash + "-ddl"
+                elif collection_name == "vannadoc":
+                    record_id = content_hash + "-doc"
+                else:  # vannaplan
+                    record_id = content_hash + "-plan"
+                
+                # 构建记录
+                insert_record = {"id": record_id}
+                for src_field, dst_field in field_map.items():
+                    value = record.get(src_field, "")
+                    # 处理tables字段：如果是数组则转为逗号分隔字符串
+                    if dst_field == "tables" and isinstance(value, list):
+                        value = ",".join(value)
+                    insert_record[dst_field] = value
+                
+                # 添加向量
+                embedding = embeddings[i]
+                insert_record["vector"] = embedding.tolist() if hasattr(embedding, 'tolist') else embedding
+                
+                insert_data.append(insert_record)
+            
+            # 批量插入
+            logger.info(f"Inserting {len(insert_data)} records to {collection_name}...")
+            vn.milvus_client.insert(collection_name=collection_name, data=insert_data)
+            logger.info(f"Successfully inserted {len(insert_data)} records to {collection_name}")
+            
+            return collection_name, len(insert_data)
+        
+        # 并行执行四个文件的处理
+        tasks = [
+            process_file("ddl.jsonl"),
+            process_file("sql_parse.jsonl"),
+            process_file("doc.jsonl"),
+            process_file("plan.jsonl")
+        ]
+        
+        results = await asyncio.gather(*tasks)
+        
+        for collection_name, inserted_count in results:
+            summary[collection_name]["inserted"] = inserted_count
+        
+        logger.info(f"Import completed. Summary: {summary}")
+        return summary
+        
+    finally:
+        # 清理临时目录
+        try:
+            shutil.rmtree(temp_dir)
+            logger.info(f"Cleaned up temp directory: {temp_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp directory: {e}")
+
+@app.post("/api/v1/training/import", response_model=ImportDataResponse)
+async def import_training_data(
+    file: UploadFile = File(..., description="ZIP压缩包，包含ddl.jsonl, sql_parse.jsonl, doc.jsonl, plan.jsonl四个文件"),
+    db_name: str = Form(..., description="数据库名称，用于标识导入的数据"),
+    clear_before_import: bool = Form(default=True, description="导入前是否清理该数据库的现有数据")
+):
+    """
+    批量导入训练数据
+    
+    支持从ZIP压缩包批量导入训练数据到Milvus向量数据库。
+    
+    ZIP文件内容要求：
+    - 必须包含四个jsonl文件：ddl.jsonl, sql_parse.jsonl, doc.jsonl, plan.jsonl
+    - 文件名必须完全匹配
+    
+    字段映射规则：
+    - ddl.jsonl → vannaddl集合: db_name, table_name, ddl_doc→ddl
+    - sql_parse.jsonl → vannasql集合: db_name, question→text, sql, tables
+    - doc.jsonl → vannadoc集合: db_name, table_name, document→doc
+    - plan.jsonl → vannaplan集合: db_name, topic, tables
+    
+    Args:
+        file: ZIP压缩包文件
+        db_name: 数据库名称
+        clear_before_import: 是否在导入前清理该数据库的现有数据
+        
+    Returns:
+        ImportDataResponse: 导入结果摘要
+    """
+    if not vn:
+        raise HTTPException(status_code=500, detail="System not initialized")
+    
+    # 验证文件类型
+    if not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="Only .zip files are supported")
+    
+    # 创建临时文件保存上传的ZIP
+    temp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(temp_dir, file.filename)
+    
+    try:
+        # 保存上传的文件
+        logger.info(f"Saving uploaded file to: {zip_path}")
+        with open(zip_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        logger.info(f"File size: {len(content)} bytes")
+        
+        # 执行导入
+        import hashlib
+        summary = await _import_training_data_from_zip(zip_path, db_name, clear_before_import)
+        
+        total_inserted = sum(s["inserted"] for s in summary.values())
+        total_parsed = sum(s["parsed"] for s in summary.values())
+        
+        return ImportDataResponse(
+            success=True,
+            message=f"Successfully imported {total_inserted} records (parsed: {total_parsed})",
+            import_summary=summary
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Import failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+    finally:
+        # 清理上传的临时文件
+        try:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            logger.info("Cleaned up uploaded file")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp files: {e}")
 
 @app.post("/api/v1/database/test", response_model=DatabaseConnectionResponse)
 async def test_database_connection(request: DatabaseConnectionRequest):

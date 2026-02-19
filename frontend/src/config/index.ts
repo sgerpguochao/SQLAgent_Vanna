@@ -48,6 +48,7 @@ export const API_ENDPOINTS = {
   TRAINING_GET: '/api/v1/training/get',
   TRAINING_ADD: '/api/v1/training/add',
   TRAINING_DELETE: '/api/v1/training/delete',
+  TRAINING_IMPORT: '/api/v1/training/import',
 
   // 数据源相关（测试用）
   DATASOURCES: '/datasources',

@@ -329,7 +329,82 @@ suffix_map = {
 
 ---
 
-### 3.4 执行查询接口
+### 3.4 批量导入训练数据接口
+
+**接口地址**: `POST /api/v1/training/import`
+
+**功能说明**: 从ZIP压缩包批量导入训练数据到Milvus向量数据库。支持并行异步插入，导入前可选择清理现有数据。
+
+**请求参数 (multipart/form-data)**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| file | file | 是 | ZIP压缩包文件 |
+| db_name | string | 是 | 数据库名称，用于标识导入的数据 |
+| clear_before_import | boolean | 否 | 导入前是否清理该数据库的现有数据，默认true |
+
+**ZIP文件格式要求**:
+- 必须包含四个jsonl文件：`ddl.jsonl`, `sql_parse.jsonl`, `doc.jsonl`, `plan.jsonl`
+- 文件名必须完全匹配
+
+**字段映射规则**:
+
+| jsonl文件 | Milvus集合 | 字段映射 |
+|-----------|-----------|---------|
+| ddl.jsonl | vannaddl | db_name→db_name, table_name→table_name, ddl_doc→ddl |
+| sql_parse.jsonl | vannasql | db_name→db_name, question→text, sql→sql, tables→tables |
+| doc.jsonl | vannadoc | db_name→db_name, table_name→table_name, document→doc |
+| plan.jsonl | vannaplan | db_name→db_name, topic→topic, tables→tables |
+
+**响应参数 (ImportDataResponse)**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 消息 |
+| import_summary | object | 导入摘要 |
+
+**import_summary 结构**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| vannaddl | object | DDL导入统计 {parsed, inserted} |
+| vannasql | object | SQL导入统计 {parsed, inserted} |
+| vannadoc | object | 文档导入统计 {parsed, inserted} |
+| vannaplan | object | 计划导入统计 {parsed, inserted} |
+
+**请求示例**:
+```bash
+curl -X POST "http://localhost:8100/api/v1/training/import" \
+  -F "file=@training_data.zip" \
+  -F "db_name=ai_sales_data" \
+  -F "clear_before_import=true"
+```
+
+**响应示例**:
+```json
+{
+    "success": true,
+    "message": "Successfully imported 20 records (parsed: 20)",
+    "import_summary": {
+        "vannaddl": {"parsed": 5, "inserted": 5},
+        "vannasql": {"parsed": 5, "inserted": 5},
+        "vannadoc": {"parsed": 5, "inserted": 5},
+        "vannaplan": {"parsed": 5, "inserted": 5}
+    }
+}
+```
+
+**错误响应示例**:
+```json
+{
+    "detail": "Missing required files in ZIP: {'sql_parse.jsonl'}"
+}
+```
+
+---
+
+### 3.5 执行查询接口
 
 **接口地址**: `POST /api/query`
 
@@ -372,10 +447,14 @@ suffix_map = {
 | TC-006 | 过滤获取 plan 类型数据 | data_type="plan" | 仅返回 plan 类型数据 |
 | TC-007 | 删除 SQL 训练数据 | - | 成功删除 |
 | TC-008 | 删除 Plan 训练数据 | - | 成功删除 |
+| TC-009 | 批量导入训练数据（带清理） | ZIP文件包含4个jsonl | 成功导入，返回摘要 |
+| TC-010 | 批量导入训练数据（追加模式） | ZIP文件包含4个jsonl | 成功追加，返回摘要 |
+| TC-011 | 无效文件类型测试 | 上传.txt文件 | 返回400错误 |
+| TC-012 | 缺少必需文件测试 | ZIP缺少sql_parse.jsonl | 返回400错误 |
 
 ### 4.2 测试脚本
 
-测试脚本位置: `playground/test_training_api.py`
+测试脚本位置: `backend/playgroud/test_training_api.py`
 
 **使用方法**：
 
@@ -383,11 +462,14 @@ suffix_map = {
 # 1. 启动 API 服务器
 cd backend
 source .env
-uvicorn vanna.api_server:app --host 0.0.0.0 --port 8000
+python -m vanna.api_server --host 0.0.0.0 --port 8100
 
-# 2. 运行测试脚本
+# 2. 运行训练API测试脚本
 cd playground
 python test_training_api.py
+
+# 3. 运行导入API测试脚本（新增）
+python test_import_api.py
 ```
 
 ---
@@ -405,7 +487,7 @@ python test_training_api.py
 ### 5.2 实际测试结果（vannaplan 集合）
 
 **测试时间**: 2026-02-19
-**测试脚本**: `playground/test_vannaplan.py`
+**测试脚本**: `backend/playgroud/test_vannaplan.py`
 
 **测试结果**:
 
@@ -635,6 +717,79 @@ plan: `客户购买行为分析：分析客户的购买频次、购买金额、�
 
 ### 7.3 测试脚本
 
-- 三个集合测试脚本: `playground/test_training_api.py`
-- vannaplan 集合测试脚本: `playground/test_vannaplan.py`
-- 初始化脚本: `playground/init_via_api.py`
+- 三个集合测试脚本: `backend/playgroud/test_training_api.py`
+- vannaplan 集合测试脚本: `backend/playgroud/test_vannaplan.py`
+- 初始化脚本: `backend/playgroud/init_via_api.py`
+- 批量导入测试脚本: `backend/playgroud/test_import_api.py`
+
+---
+
+## 八、批量导入功能（新增）
+
+### 8.1 功能概述
+
+新增批量导入训练数据功能，支持从ZIP压缩包一次性导入DDL、SQL、文档、主题规划四种类型的训练数据。
+
+### 8.2 后端实现
+
+**文件**: `backend/vanna/api_server.py`
+
+**新增API**: `POST /api/v1/training/import`
+
+**核心特性**:
+1. 支持JSON数组格式和标准jsonl格式
+2. 导入前按db_name清理现有数据
+3. 并行异步处理四个文件
+4. 自动生成向量嵌入
+5. 导入完成后自动清理临时文件
+
+### 8.3 数据类型判断逻辑修复
+
+**问题**: 之前使用内容判断data_type不准确，导致前端统计与Milvus实际数据不一致
+
+**修复方案**: 改为根据ID后缀判断数据类型
+- `-sql` → sql
+- `-ddl` → ddl
+- `-doc` → documentation
+- `-plan` → plan
+
+### 8.4 前端实现
+
+**文件**: `frontend/src/components/TrainingDataPanel.tsx`
+
+**新增功能**:
+1. "批量导入"按钮（紫色主题）
+2. 导入弹窗（数据库选择、ZIP文件上传、清理选项）
+3. 前端校验（文件格式、大小）
+4. 导入过程锁定屏幕
+5. 成功后5秒自动关闭弹窗
+6. 分页加载所有数据确保统计准确
+
+### 8.5 测试用例
+
+| 编号 | 测试用例 | 测试数据 | 预期结果 |
+|------|---------|---------|---------|
+| TC-013 | 批量导入（带清理） | ZIP文件 | 成功导入116条 |
+| TC-014 | 批量导入（追加模式） | ZIP文件 | 成功追加 |
+| TC-015 | 无效文件类型 | .txt文件 | 返回400错误 |
+| TC-016 | 缺少必需文件 | 不完整ZIP | 返回400错误 |
+| TC-017 | 数据一致性验证 | - | 前后端统计一致 |
+
+### 8.6 测试验证结果
+
+```
+Milvus集合统计:
+- vannasql: 98条
+- vannaddl: 5条
+- vannadoc: 6条
+- vannaplan: 7条
+总计: 116条
+
+前端统计:
+- sql: 98条
+- ddl: 5条
+- documentation: 6条
+- plan: 7条
+总计: 116条
+
+✅ 数据一致
