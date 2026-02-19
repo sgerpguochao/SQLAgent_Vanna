@@ -585,7 +585,55 @@ vannaplan 集合用于存储业务分析主题，支持 RAG 检索。
 | topic | topic |
 | tables | tables |
 
-### 7.2 测试脚本
+### 7.2 前端修改（vannaplan 支持）
+
+#### 7.2.1 修改的文件
+
+| 文件 | 修改内容 |
+|------|---------|
+| `frontend/src/components/TrainingDataPanel.tsx` | 添加/删除/过滤/统计 plan 类型 |
+| `frontend/src/components/Dashboard.tsx` | 快速指南添加主题规划 |
+
+#### 7.2.2 TrainingDataPanel 修改内容
+
+1. **示例模板**: 添加 plan 类型模板
+```typescript
+plan: `客户购买行为分析：分析客户的购买频次、购买金额、购买商品类别等，用于精准营销和客户分层`
+```
+
+2. **数据类型选择**: 添加 "Plan (主题规划)" 选项
+
+3. **统计卡片**: 添加 "主题规划" 统计（5列布局）
+
+4. **过滤器**: 添加 "主题规划" 过滤选项
+
+5. **表单逻辑**: 添加 plan 类型的 "涉及的数据表" 输入字段
+
+6. **删除对话框**: 添加 plan 类型的橙色样式显示和表信息
+
+#### 7.2.3 Dashboard 修改内容
+
+快速指南添加主题规划板块：
+```tsx
+<div className="bg-[#13152E] rounded-lg p-3 border border-orange-500/20">
+  <div className="font-medium text-orange-400 mb-2">🟠 主题规划</div>
+  <p className="leading-relaxed">
+    提供数据库内相关业务划分及其该业务所有含表，帮助AI理解数据业务所关联的表信息。
+  </p>
+</div>
+```
+
+#### 7.2.4 前端功能验证
+
+| 功能 | 状态 |
+|------|------|
+| 添加 plan 训练数据 | ✅ 通过 |
+| 获取训练数据列表（包含 plan 统计） | ✅ 通过 |
+| 过滤 plan 类型数据 | ✅ 通过 |
+| 删除 plan 训练数据 | ✅ 通过 |
+| 快速指南主题规划显示 | ✅ 通过 |
+
+### 7.3 测试脚本
 
 - 三个集合测试脚本: `playground/test_training_api.py`
 - vannaplan 集合测试脚本: `playground/test_vannaplan.py`
