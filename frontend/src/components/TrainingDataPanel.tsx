@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Trash2, Download, Upload, Database, RefreshCw, Search, Filter, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
+import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import {
   Dialog,
@@ -44,14 +45,21 @@ ORDER BY total_quantity DESC
 LIMIT 10`
 };
 
+interface TrainingDataPanelProps {
+  selectedDatabase?: string | null;
+}
+
 interface TrainingData {
   id: string;
   data_type: string;
   content: string;
   question?: string;
+  db_name?: string;
+  table_name?: string;
+  tables?: string;
 }
 
-export function TrainingDataPanel() {
+export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) {
   const [trainingData, setTrainingData] = useState<TrainingData[]>([]);
   const [filteredData, setFilteredData] = useState<TrainingData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -60,11 +68,15 @@ export function TrainingDataPanel() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<TrainingData | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [databaseList, setDatabaseList] = useState<string[]>([]);
+  const [selectedDbName, setSelectedDbName] = useState<string>('');
 
   // 添加表单状态
   const [dataType, setDataType] = useState<'documentation' | 'ddl' | 'sql'>('sql');
   const [content, setContent] = useState('');
   const [question, setQuestion] = useState('');
+  const [tableName, setTableName] = useState('');
+  const [tables, setTables] = useState('');
 
   // 加载训练数据
   const loadTrainingData = async () => {
@@ -85,6 +97,22 @@ export function TrainingDataPanel() {
     }
   };
 
+  // 从 localStorage 获取数据库列表
+  const loadDatabaseList = () => {
+    try {
+      const configs = localStorage.getItem('dataSourceConfigs');
+      if (configs) {
+        const parsed = JSON.parse(configs);
+        // 提取数据库名称
+        const dbList = parsed.map((c: any) => c.database).filter(Boolean);
+        return [...new Set(dbList)]; // 去重
+      }
+    } catch (e) {
+      console.error('读取数据库列表失败:', e);
+    }
+    return [];
+  };
+
   // 添加训练数据
   const handleAdd = async () => {
     if (!content.trim()) {
@@ -97,16 +125,33 @@ export function TrainingDataPanel() {
       return;
     }
 
+    // 检查是否选择了数据库
+    if (!selectedDbName) {
+      toast.error('请选择数据库');
+      return;
+    }
+
     setIsLoading(true);
     try {
+      // 构建请求参数
+      const requestBody: any = {
+        data_type: dataType,
+        content: content,
+        db_name: selectedDbName
+      };
+
+      // 根据类型添加不同字段
+      if (dataType === 'sql') {
+        requestBody.question = question;
+        requestBody.tables = tables || '';
+      } else if (dataType === 'ddl' || dataType === 'documentation') {
+        requestBody.table_name = tableName || '';
+      }
+
       const response = await fetch(getApiUrl(API_ENDPOINTS.TRAINING_ADD), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          data_type: dataType,
-          content: content,
-          question: dataType === 'sql' ? question : undefined
-        })
+        body: JSON.stringify(requestBody)
       });
 
       const data = await response.json();
@@ -115,6 +160,8 @@ export function TrainingDataPanel() {
         toast.success(data.message || '添加成功');
         setContent('');
         setQuestion('');
+        setTableName('');
+        setTables('');
         setShowAddForm(false);
         loadTrainingData();
       } else {
@@ -195,7 +242,21 @@ export function TrainingDataPanel() {
 
   useEffect(() => {
     loadTrainingData();
+    // 加载数据库列表
+    const dbs = loadDatabaseList();
+    setDatabaseList(dbs);
+    // 如果传入了 selectedDatabase，使用它
+    if (selectedDatabase) {
+      setSelectedDbName(selectedDatabase);
+    }
   }, []);
+
+  // 当 selectedDatabase 变化时更新
+  useEffect(() => {
+    if (selectedDatabase) {
+      setSelectedDbName(selectedDatabase);
+    }
+  }, [selectedDatabase]);
 
   // 统计各类型数量
   const stats = {
@@ -302,6 +363,29 @@ export function TrainingDataPanel() {
             <div className="grid grid-cols-2 gap-4">
               {/* Left Column */}
               <div className="space-y-4">
+                {/* 数据库选择 - 下拉框 */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-300">数据库 <span className="text-red-400">*</span></label>
+                  {databaseList.length > 0 ? (
+                    <Select value={selectedDbName} onValueChange={setSelectedDbName}>
+                      <SelectTrigger className="bg-[#0A0B1E] border-white/10 text-gray-300">
+                        <SelectValue placeholder="选择数据库" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {databaseList.map((db) => (
+                          <SelectItem key={db} value={db}>
+                            {db}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                      <span className="text-red-400 text-sm">无可用数据库</span>
+                    </div>
+                  )}
+                </div>
+
                 {/* 数据类型选择 */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-gray-300">数据类型</label>
@@ -325,7 +409,33 @@ export function TrainingDataPanel() {
                       placeholder="输入对应的业务问题，如：哪个品牌销量最高？"
                       value={question}
                       onChange={(e) => setQuestion(e.target.value)}
-                      className="min-h-[100px] bg-[#0A0B1E] border-white/10 text-gray-300"
+                      className="min-h-[80px] bg-[#0A0B1E] border-white/10 text-gray-300"
+                    />
+                  </div>
+                )}
+
+                {/* SQL 类型：涉及的数据表 */}
+                {dataType === 'sql' && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-300">涉及的数据表</label>
+                    <Input
+                      placeholder="如: customers,orders (逗号分隔)"
+                      value={tables}
+                      onChange={(e) => setTables(e.target.value)}
+                      className="bg-[#0A0B1E] border-white/10 text-gray-300"
+                    />
+                  </div>
+                )}
+
+                {/* DDL/Doc 类型：表名称 */}
+                {(dataType === 'ddl' || dataType === 'documentation') && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-300">表名称</label>
+                    <Input
+                      placeholder="如: customers"
+                      value={tableName}
+                      onChange={(e) => setTableName(e.target.value)}
+                      className="bg-[#0A0B1E] border-white/10 text-gray-300"
                     />
                   </div>
                 )}
@@ -369,6 +479,8 @@ export function TrainingDataPanel() {
                   setShowAddForm(false);
                   setContent('');
                   setQuestion('');
+                  setTableName('');
+                  setTables('');
                 }}
                 variant="outline"
                 className="border-white/10 text-gray-400"

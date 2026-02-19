@@ -120,96 +120,106 @@ class MyVanna(Milvus_VectorStore, OpenAI_Chat):
     def add_documentation(self, documentation: Union[str, List[str]], **kwargs) -> Union[str, List[str]]:
         """
         添加文档（支持单条或批量）
-        
+
         Args:
             documentation: 文档内容（str 或 List[str]）
-            
+
         Returns:
             str 或 List[str]: 文档 ID
         """
         # 统一处理：单条转为列表
         is_single = isinstance(documentation, str)
         docs = [documentation] if is_single else documentation
-        
+
         if not docs or (is_single and len(documentation) == 0):
             raise Exception("documentation can not be null")
-        
+
+        db_name = kwargs.get("db_name", "")
+        table_name = kwargs.get("table_name", "")
+
         # 批量处理
         doc_ids = [self._get_content_hash(doc) for doc in docs]
         exists_map = self._check_exists_by_ids("vannadoc", doc_ids)
-        
+
         to_insert = []
         for doc, doc_id in zip(docs, doc_ids):
             if exists_map.get(doc_id, False):
                 logger.info(f"Document already exists: {doc_id[:20]}...")
             else:
                 to_insert.append((doc, doc_id))
-        
+
         if to_insert:
             # 批量生成向量
             texts = [doc for doc, _ in to_insert]
             logger.info(f"Generating {len(texts)} embeddings in batch...")
             embeddings = self.embedding_function.encode_documents(texts)
-            
+
             # 批量插入
             insert_data = [
                 {
                     "id": doc_id,
                     "doc": doc,
+                    "db_name": db_name,
+                    "table_name": table_name,
                     "vector": embedding.tolist() if hasattr(embedding, 'tolist') else embedding
                 }
                 for (doc, doc_id), embedding in zip(to_insert, embeddings)
             ]
-            
+
             self.milvus_client.insert(collection_name="vannadoc", data=insert_data)
             logger.info(f"Successfully inserted {len(insert_data)} new documents in batch")
-        
+
         # 返回类型与输入一致
         return doc_ids[0] if is_single else doc_ids
     
     def add_ddl(self, ddl: Union[str, List[str]], **kwargs) -> Union[str, List[str]]:
         """
         添加 DDL（支持单条或批量）
-        
+
         Args:
             ddl: DDL 语句（str 或 List[str]）
-            
+
         Returns:
             str 或 List[str]: DDL ID
         """
         is_single = isinstance(ddl, str)
         ddls = [ddl] if is_single else ddl
-        
+
         if not ddls or (is_single and len(ddl) == 0):
             raise Exception("ddl can not be null")
-        
+
+        db_name = kwargs.get("db_name", "")
+        table_name = kwargs.get("table_name", "")
+
         ddl_ids = [self._get_content_hash(d) for d in ddls]
         exists_map = self._check_exists_by_ids("vannaddl", ddl_ids)
-        
+
         to_insert = []
         for d, ddl_id in zip(ddls, ddl_ids):
             if exists_map.get(ddl_id, False):
                 logger.info(f"DDL already exists: {ddl_id[:20]}...")
             else:
                 to_insert.append((d, ddl_id))
-        
+
         if to_insert:
             texts = [d for d, _ in to_insert]
             logger.info(f"Generating {len(texts)} DDL embeddings in batch...")
             embeddings = self.embedding_function.encode_documents(texts)
-            
+
             insert_data = [
                 {
                     "id": ddl_id,
                     "ddl": d,
+                    "db_name": db_name,
+                    "table_name": table_name,
                     "vector": embedding.tolist() if hasattr(embedding, 'tolist') else embedding
                 }
                 for (d, ddl_id), embedding in zip(to_insert, embeddings)
             ]
-            
+
             self.milvus_client.insert(collection_name="vannaddl", data=insert_data)
             logger.info(f"Successfully inserted {len(insert_data)} new DDLs in batch")
-        
+
         return ddl_ids[0] if is_single else ddl_ids
     
     # ==================== 重写 train 方法 ====================
@@ -220,21 +230,27 @@ class MyVanna(Milvus_VectorStore, OpenAI_Chat):
         ddl: Union[str, List[str]] = None,
         documentation: Union[str, List[str]] = None,
         plan: TrainingPlan = None,
+        db_name: str = "",
+        table_name: str = "",
+        tables: str = "",
     ) -> Union[str, List[str], None]:
         """
         训练 Vanna（支持批量）
-        
+
         Args:
             question: 问题（仅用于单条 SQL 训练）
             sql: SQL 语句（仅用于单条训练）
             ddl: DDL 语句（支持单条或批量）
             documentation: 文档（支持单条或批量）
             plan: 训练计划对象
-        
+            db_name: 数据库名称（新增字段）
+            table_name: 表名称（新增字段，用于ddl和doc）
+            tables: 涉及的数据表（新增字段，用于sql）
+
         Returns:
             插入的 ID
         """
-        
+
         # 1. 处理 question + sql
         if question and not sql:
             raise ValidationError("Please also provide a SQL query")
@@ -243,21 +259,21 @@ class MyVanna(Milvus_VectorStore, OpenAI_Chat):
             if question is None:
                 question = self.generate_question(sql)
                 logger.info("Question generated with sql:", question, "\nAdding SQL...")
-            return self.add_question_sql(question=question, sql=sql)
-        
+            return self.add_question_sql(question=question, sql=sql, db_name=db_name, tables=tables)
+
         # 2. 处理 documentation（支持批量）
         if documentation is not None:
             is_list = isinstance(documentation, list)
             count = len(documentation) if is_list else 1
             logger.info(f"Adding {count} document(s)...")
-            return self.add_documentation(documentation)
-        
+            return self.add_documentation(documentation, db_name=db_name, table_name=table_name)
+
         # 3. 处理 ddl（支持单条或批量）
         if ddl is not None:
             is_list = isinstance(ddl, list)
             count = len(ddl) if is_list else 1
             logger.info(f"Adding {count} DDL(s)...")
-            return self.add_ddl(ddl)
+            return self.add_ddl(ddl, db_name=db_name, table_name=table_name)
         
         # 4. 处理 TrainingPlan
         if plan:

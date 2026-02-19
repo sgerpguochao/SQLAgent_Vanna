@@ -209,7 +209,7 @@ export const Dashboard: React.FC = () => {
         ) : (
           /* Full Width Training Data Management Panel */
           <div className="flex-1 min-w-0 bg-[#0B0D1E]">
-            <TrainingDataPanel />
+            <TrainingDataPanel selectedDatabase={selectedDatabase} />
           </div>
         )}
       </div>

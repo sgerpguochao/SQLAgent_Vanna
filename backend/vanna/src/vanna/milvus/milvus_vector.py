@@ -94,6 +94,8 @@ class Milvus_VectorStore(VannaBase):
             vannasql_schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True)
             vannasql_schema.add_field(field_name="text", datatype=DataType.VARCHAR, max_length=65535)
             vannasql_schema.add_field(field_name="sql", datatype=DataType.VARCHAR, max_length=65535)
+            vannasql_schema.add_field(field_name="db_name", datatype=DataType.VARCHAR, max_length=255)
+            vannasql_schema.add_field(field_name="tables", datatype=DataType.VARCHAR, max_length=65535)
             vannasql_schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self._embedding_dim)
 
             vannasql_index_params = self.milvus_client.prepare_index_params()
@@ -119,6 +121,8 @@ class Milvus_VectorStore(VannaBase):
             )
             vannaddl_schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True)
             vannaddl_schema.add_field(field_name="ddl", datatype=DataType.VARCHAR, max_length=65535)
+            vannaddl_schema.add_field(field_name="db_name", datatype=DataType.VARCHAR, max_length=255)
+            vannaddl_schema.add_field(field_name="table_name", datatype=DataType.VARCHAR, max_length=255)
             vannaddl_schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self._embedding_dim)
 
             vannaddl_index_params = self.milvus_client.prepare_index_params()
@@ -144,6 +148,8 @@ class Milvus_VectorStore(VannaBase):
             )
             vannadoc_schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True)
             vannadoc_schema.add_field(field_name="doc", datatype=DataType.VARCHAR, max_length=65535)
+            vannadoc_schema.add_field(field_name="db_name", datatype=DataType.VARCHAR, max_length=255)
+            vannadoc_schema.add_field(field_name="table_name", datatype=DataType.VARCHAR, max_length=255)
             vannadoc_schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self._embedding_dim)
 
             vannadoc_index_params = self.milvus_client.prepare_index_params()
@@ -166,12 +172,16 @@ class Milvus_VectorStore(VannaBase):
             raise Exception("pair of question and sql can not be null")
         _id = str(uuid.uuid4()) + "-sql"
         embedding = self.embedding_function.encode_documents([question])[0]
+        db_name = kwargs.get("db_name", "")
+        tables = kwargs.get("tables", "")
         self.milvus_client.insert(
             collection_name="vannasql",
             data={
                 "id": _id,
                 "text": question,
                 "sql": sql,
+                "db_name": db_name,
+                "tables": tables,
                 "vector": embedding
             }
         )
@@ -182,11 +192,15 @@ class Milvus_VectorStore(VannaBase):
             raise Exception("ddl can not be null")
         _id = str(uuid.uuid4()) + "-ddl"
         embedding = self.embedding_function.encode_documents([ddl])[0]
+        db_name = kwargs.get("db_name", "")
+        table_name = kwargs.get("table_name", "")
         self.milvus_client.insert(
             collection_name="vannaddl",
             data={
                 "id": _id,
                 "ddl": ddl,
+                "db_name": db_name,
+                "table_name": table_name,
                 "vector": embedding
             }
         )
@@ -197,11 +211,15 @@ class Milvus_VectorStore(VannaBase):
             raise Exception("documentation can not be null")
         _id = str(uuid.uuid4()) + "-doc"
         embedding = self.embedding_function.encode_documents([documentation])[0]
+        db_name = kwargs.get("db_name", "")
+        table_name = kwargs.get("table_name", "")
         self.milvus_client.insert(
             collection_name="vannadoc",
             data={
                 "id": _id,
                 "doc": documentation,
+                "db_name": db_name,
+                "table_name": table_name,
                 "vector": embedding
             }
         )
@@ -219,6 +237,8 @@ class Milvus_VectorStore(VannaBase):
                 "id": [doc["id"] for doc in sql_data],
                 "question": [doc["text"] for doc in sql_data],
                 "content": [doc["sql"] for doc in sql_data],
+                "db_name": [doc.get("db_name", "") for doc in sql_data],
+                "tables": [doc.get("tables", "") for doc in sql_data],
             }
         )
         df = pd.concat([df, df_sql])
@@ -234,6 +254,8 @@ class Milvus_VectorStore(VannaBase):
                 "id": [doc["id"] for doc in ddl_data],
                 "question": [None for doc in ddl_data],
                 "content": [doc["ddl"] for doc in ddl_data],
+                "db_name": [doc.get("db_name", "") for doc in ddl_data],
+                "table_name": [doc.get("table_name", "") for doc in ddl_data],
             }
         )
         df = pd.concat([df, df_ddl])
@@ -249,6 +271,8 @@ class Milvus_VectorStore(VannaBase):
                 "id": [doc["id"] for doc in doc_data],
                 "question": [None for doc in doc_data],
                 "content": [doc["doc"] for doc in doc_data],
+                "db_name": [doc.get("db_name", "") for doc in doc_data],
+                "table_name": [doc.get("table_name", "") for doc in doc_data],
             }
         )
         df = pd.concat([df, df_doc])
