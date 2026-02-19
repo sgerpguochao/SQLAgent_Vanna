@@ -11,6 +11,7 @@ import tempfile
 import shutil
 import asyncio
 import hashlib
+import uuid
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
@@ -941,16 +942,16 @@ async def _import_training_data_from_zip(zip_path: str, db_name: str, clear_befo
             # 构建插入数据
             insert_data = []
             for i, record in enumerate(records):
-                # 生成ID
-                content_hash = hashlib.md5(texts[i].encode('utf-8')).hexdigest()
+                # 生成唯一ID（使用UUID确保每次导入都是新记录）
+                unique_id = str(uuid.uuid4())
                 if collection_name == "vannasql":
-                    record_id = content_hash + "-sql"
+                    record_id = unique_id + "-sql"
                 elif collection_name == "vannaddl":
-                    record_id = content_hash + "-ddl"
+                    record_id = unique_id + "-ddl"
                 elif collection_name == "vannadoc":
-                    record_id = content_hash + "-doc"
+                    record_id = unique_id + "-doc"
                 else:  # vannaplan
-                    record_id = content_hash + "-plan"
+                    record_id = unique_id + "-plan"
                 
                 # 构建记录
                 insert_record = {"id": record_id}

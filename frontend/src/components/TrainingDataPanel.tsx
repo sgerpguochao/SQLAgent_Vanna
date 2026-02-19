@@ -102,7 +102,13 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
       
       // 分页获取所有数据
       while (true) {
-        const response = await fetch(getApiUrl(API_ENDPOINTS.TRAINING_GET) + `?limit=${batchSize}&offset=${offset}`);
+        const response = await fetch(getApiUrl(API_ENDPOINTS.TRAINING_GET) + `?limit=${batchSize}&offset=${offset}`, {
+          cache: 'no-store',  // 禁用缓存
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        });
         const data = await response.json();
         
         if (data.success && data.data && data.data.length > 0) {
