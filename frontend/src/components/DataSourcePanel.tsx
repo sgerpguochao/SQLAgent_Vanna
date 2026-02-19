@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, ChevronDown, Database, Table2, Search, Plus, Trash2, Server, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Database, Table2, Search, Plus, Trash2, Server, X, Check } from 'lucide-react';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from './ui/hover-card';
@@ -154,8 +154,10 @@ export function DataSourcePanel({ onTableSelect, onDatabaseSelect }: DataSourceP
     const config = configs.find((c: DataSourceConfig) => c.id === configId);
 
     if (config) {
+      console.log('[DataSourcePanel] Selected config:', config.id, config.name, 'database:', config.database);
       // 传递数据库信息给父组件
       if (onDatabaseSelect) {
+        console.log('[DataSourcePanel] Calling onDatabaseSelect with:', config.database);
         onDatabaseSelect(config.database);
       }
 
@@ -609,6 +611,11 @@ export function DataSourcePanel({ onTableSelect, onDatabaseSelect }: DataSourceP
                       : 'hover:bg-white/5 border border-transparent'
                   }`}
                 >
+                  {selectedDataSourceId === ds.id ? (
+                    <Check className="w-3 h-3 flex-shrink-0 text-cyan-400" />
+                  ) : (
+                    <div className="w-3 h-3 flex-shrink-0" />
+                  )}
                   <Database className={`w-3 h-3 flex-shrink-0 ${selectedDataSourceId === ds.id ? 'text-cyan-400' : 'text-gray-500'}`} />
                   <span className={`text-xs truncate flex-1 ${selectedDataSourceId === ds.id ? 'text-cyan-300' : 'text-gray-400'}`}>
                     {ds.name}

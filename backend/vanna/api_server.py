@@ -54,6 +54,9 @@ class TrainingDataRequest(BaseModel):
     data_type: str = Field(..., description="数据类型: 'sql', 'ddl', 'documentation'")
     content: Any = Field(..., description="训练数据内容（str 或 List[str]）")
     question: Optional[str] = Field(None, description="问题（仅 SQL 类型需要）")
+    db_name: Optional[str] = Field("", description="数据库名称")
+    table_name: Optional[str] = Field("", description="表名称（ddl/doc类型使用）")
+    tables: Optional[str] = Field("", description="涉及的数据表（sql类型使用，逗号分隔）")
 
 class TrainingDataResponse(BaseModel):
     """训练数据响应"""
@@ -77,6 +80,7 @@ class QueryRequest(BaseModel):
     table_name: Optional[str] = Field(None, description="表名")
     file_id: Optional[str] = Field(None, description="文件ID")
     limit: Optional[int] = Field(100, description="结果数量限制")
+    db_name: Optional[str] = Field(None, description="数据库名称，用于切换数据库连接")
 
 class QueryResponse(BaseModel):
     """查询响应"""
@@ -112,6 +116,9 @@ app = None  # 会在下面的 lifespan 部分重新创建
 vn = None  # Vanna 客户端
 agent = None  # Agent 实例
 llm = None  # LLM 实例
+
+# 数据库连接配置缓存 (db_name -> connection_config)
+db_connection_configs: Dict[str, Dict[str, Any]] = {}
 
 # ==================== 初始化函数 ====================
 
@@ -592,21 +599,34 @@ async def add_training_data(request: TrainingDataRequest):
     
     try:
         ids = None
-        
+
         if request.data_type == "sql":
             if not request.question:
                 raise HTTPException(status_code=400, detail="SQL type requires question parameter")
             if not isinstance(request.content, str):
                 raise HTTPException(status_code=400, detail="SQL type content must be a string")
-            ids = [vn.add_question_sql(question=request.question, sql=request.content)]
-            
+            ids = [vn.add_question_sql(
+                question=request.question,
+                sql=request.content,
+                db_name=request.db_name,
+                tables=request.tables
+            )]
+
         elif request.data_type == "ddl":
-            ids = vn.add_ddl(request.content)
+            ids = vn.add_ddl(
+                request.content,
+                db_name=request.db_name,
+                table_name=request.table_name
+            )
             if isinstance(ids, str):
                 ids = [ids]
-                
+
         elif request.data_type == "documentation":
-            ids = vn.add_documentation(request.content)
+            ids = vn.add_documentation(
+                request.content,
+                db_name=request.db_name,
+                table_name=request.table_name
+            )
             if isinstance(ids, str):
                 ids = [ids]
         else:
@@ -676,12 +696,23 @@ async def get_training_data(
         total = len(df)
         df = df.iloc[offset:offset + limit]
 
+        # 替换 NaN 值为 None，以便 JSON 序列化
+        df = df.fillna(value=pd.NA)
+
+        # 转换为字典时处理 NA 值
+        records = df.to_dict(orient='records')
+        # 将 pd.NA 转换为 None
+        for record in records:
+            for key, value in record.items():
+                if pd.isna(value):
+                    record[key] = None
+
         return {
             "success": True,
             "total": total,
             "limit": limit,
             "offset": offset,
-            "data": df.to_dict(orient='records')
+            "data": records
         }
         
     except Exception as e:
@@ -818,6 +849,17 @@ async def connect_database(request: DatabaseConnectionRequest):
             cursor.close()
             connection.close()
 
+            # 保存数据库连接配置到全局缓存
+            if request.database and request.host and request.username:
+                db_connection_configs[request.database] = {
+                    "host": request.host,
+                    "dbname": request.database,
+                    "user": request.username,
+                    "password": request.password,
+                    "port": int(request.port)
+                }
+                logger.info(f"Cached connection config for database: {request.database}")
+
             # 更新全局vn客户端连接
             if vn:
                 try:
@@ -875,6 +917,20 @@ async def query_data(request: QueryRequest):
 
     if not vn:
         raise HTTPException(status_code=500, detail="System not initialized")
+
+    # 如果提供了 db_name，切换到对应的数据库连接
+    if request.db_name:
+        if request.db_name in db_connection_configs:
+            config = db_connection_configs[request.db_name]
+            try:
+                vn.connect_to_mysql(**config)
+                logger.info(f"[Query] Switched to database: {request.db_name}")
+            except Exception as e:
+                logger.warning(f"[Query] Failed to switch to database {request.db_name}: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Failed to connect to database {request.db_name}: {str(e)}")
+        else:
+            logger.warning(f"[Query] Database {request.db_name} not found in connection cache")
+            raise HTTPException(status_code=400, detail=f"Database {request.db_name} not found. Please reconnect to this database first.")
 
     try:
         # 如果提供了SQL，直接执行

@@ -18,6 +18,11 @@ export function QueryPanel({ selectedTable, selectedDatabase, onQueryResult }: Q
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [sqlQuery, setSqlQuery] = useState('SELECT * FROM table_name LIMIT 10;');
 
+  // 调试：跟踪 selectedDatabase 变化
+  useEffect(() => {
+    console.log('[QueryPanel] selectedDatabase changed:', selectedDatabase);
+  }, [selectedDatabase]);
+
   // 当选中的表变化时，更新SQL
   useEffect(() => {
     if (selectedTable) {
@@ -33,6 +38,9 @@ export function QueryPanel({ selectedTable, selectedDatabase, onQueryResult }: Q
   }, [selectedTable]);
 
   const handleRun = async () => {
+    // 调试日志
+    console.log('[QueryPanel] handleRun called, selectedDatabase:', selectedDatabase, 'selectedTable:', selectedTable);
+
     // 检查是否选择了数据库
     if (!selectedDatabase) {
       alert('请先在左侧选择一个数据源（数据库）');
@@ -65,7 +73,7 @@ export function QueryPanel({ selectedTable, selectedDatabase, onQueryResult }: Q
       return;
     }
 
-    console.log('[SQL查询] 开始执行:', { sql: sqlQuery, selectedTable, selectedFileId });
+    console.log('[SQL查询] 开始执行:', { sql: sqlQuery, selectedTable, selectedFileId, selectedDatabase });
     setIsQuerying(true);
     try {
       const request: any = { sql: sqlQuery };
@@ -75,6 +83,11 @@ export function QueryPanel({ selectedTable, selectedDatabase, onQueryResult }: Q
         request.file_id = selectedFileId;
       } else {
         request.table_name = selectedTable;
+      }
+
+      // 传递选中的数据库名称，以便后端切换到正确的数据库连接
+      if (selectedDatabase) {
+        request.db_name = selectedDatabase;
       }
 
       const result = await api.queryData(request);

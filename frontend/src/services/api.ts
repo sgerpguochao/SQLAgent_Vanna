@@ -54,11 +54,12 @@ export interface FileUploadResponse {
 }
 
 export interface QueryRequest {
-  query: string;
-  file_id?: string;
+  query?: string;
+  sql?: string;
   table_name?: string;
-  columns?: string[];
+  file_id?: string;
   limit?: number;
+  db_name?: string;
 }
 
 export interface QueryResponse {
