@@ -12,12 +12,18 @@ import { Database, BookOpen } from 'lucide-react';
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [selectedDatabase, setSelectedDatabase] = useState<string | null>(null);
   const [queryResult, setQueryResult] = useState<any>(null);
   const [leftPanelTab, setLeftPanelTab] = useState<'datasource' | 'training'>('datasource');
 
   const handleTableSelect = (tableName: string) => {
     setSelectedTable(tableName);
     console.log('选中表:', tableName);
+  };
+
+  const handleDatabaseSelect = (dbName: string) => {
+    setSelectedDatabase(dbName);
+    console.log('选中数据库:', dbName);
   };
 
   const handleQueryResult = (result: any) => {
@@ -49,9 +55,9 @@ export const Dashboard: React.FC = () => {
           </h1>
         </div>
         <div className="ml-auto flex items-center gap-4">
-          {selectedTable && (
+          {selectedDatabase && (
             <div className="text-sm text-gray-400">
-              当前表: <span className="text-cyan-400">{selectedTable}</span>
+              当前数据库: <span className="text-cyan-400">{selectedDatabase}</span>
             </div>
           )}
           <button className="px-5 py-2 rounded-lg bg-gradient-to-r from-cyan-500/20 to-blue-600/20 hover:from-cyan-500/30 hover:to-blue-600/30 border border-cyan-500/30 transition-all text-cyan-300 font-medium text-sm">
@@ -93,7 +99,7 @@ export const Dashboard: React.FC = () => {
           {/* Panel Content */}
           <div className="flex-1 min-h-0 overflow-hidden">
             {leftPanelTab === 'datasource' ? (
-              <DataSourcePanel onTableSelect={handleTableSelect} />
+              <DataSourcePanel onTableSelect={handleTableSelect} onDatabaseSelect={handleDatabaseSelect} />
             ) : (
               /* Training Data Quick Info Panel */
               <div className="p-4 space-y-4">
@@ -184,6 +190,7 @@ export const Dashboard: React.FC = () => {
               <div className="flex-shrink-0">
                 <QueryPanel
                   selectedTable={selectedTable}
+                  selectedDatabase={selectedDatabase}
                   onQueryResult={handleQueryResult}
                 />
               </div>

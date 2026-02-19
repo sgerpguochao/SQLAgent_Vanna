@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, ChevronDown, Database, Table2, Search, Plus } from 'lucide-react';
+import { ChevronRight, ChevronDown, Database, Table2, Search, Plus, Trash2, Server, X } from 'lucide-react';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from './ui/hover-card';
@@ -27,11 +27,25 @@ interface DataSource {
   source: string;
 }
 
-interface DataSourcePanelProps {
-  onTableSelect?: (tableName: string) => void;
+// 数据源配置（包含连接信息）
+interface DataSourceConfig {
+  id: string;
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  database: string;
+  tables?: DataSource[]; // 保存的表结构
+  createdAt: number;
 }
 
-export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
+interface DataSourcePanelProps {
+  onTableSelect?: (tableName: string) => void;
+  onDatabaseSelect?: (dbName: string) => void;
+}
+
+export function DataSourcePanel({ onTableSelect, onDatabaseSelect }: DataSourcePanelProps) {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['数据库表']));
   const [searchQuery, setSearchQuery] = useState('');
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
@@ -46,32 +60,168 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
     database: '',
   });
 
-  useEffect(() => {
-    loadDataSources();
-  }, []);
+  // 数据源列表状态
+  const [dataSourceConfigs, setDataSourceConfigs] = useState<DataSourceConfig[]>([]);
+  const [selectedDataSourceId, setSelectedDataSourceId] = useState<string | null>(null);
+  const [dataSourceName, setDataSourceName] = useState('');
 
-  const loadDataSources = async () => {
+  // 数据源列表搜索
+  const [dataSourceSearchQuery, setDataSourceSearchQuery] = useState('');
+
+  // 生成唯一ID
+  const generateId = () => {
+    return `ds_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  };
+
+  // 加载数据源配置列表
+  const loadDataSourceConfigs = async () => {
+    try {
+      const savedConfigs = localStorage.getItem('dataSourceConfigs');
+      if (savedConfigs) {
+        const configs = JSON.parse(savedConfigs);
+        setDataSourceConfigs(configs);
+        // 如果有保存的配置，自动选择第一个
+        if (configs.length > 0 && !selectedDataSourceId) {
+          setSelectedDataSourceId(configs[0].id);
+        }
+      }
+      // 无论是否有数据，都设置 loading 为 false
+      setLoading(false);
+    } catch (error) {
+      console.error('加载数据源配置失败:', error);
+      setLoading(false);
+    }
+  };
+
+  // 保存数据源配置列表
+  const saveDataSourceConfigs = (configs: DataSourceConfig[]) => {
+    localStorage.setItem('dataSourceConfigs', JSON.stringify(configs));
+    setDataSourceConfigs(configs);
+  };
+
+  // 加载数据源表结构
+  const loadDataSourceTables = async (config: DataSourceConfig) => {
     try {
       setLoading(true);
-      // 从localStorage加载之前保存的数据源
-      const savedSources = localStorage.getItem('dataSources');
-      if (savedSources) {
-        setDataSources(JSON.parse(savedSources));
+      console.log('正在连接数据库:', config.host, config.database);
+      const response = await api.connectDatabase({
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+        database: config.database,
+      });
+
+      console.log('数据库响应:', response);
+
+      if (response.success && response.tables) {
+        const tables = response.tables.map((table: any) => ({
+          name: table.name,
+          table: table.name,
+          rows: 0,
+          columns: table.children || [],
+          description: `表 ${table.name}`,
+          source: 'mysql',
+          children: table.children,
+        }));
+        console.log('加载了', tables.length, '个表');
+        setDataSources(tables);
+
+        // 更新配置中的表结构 - 从 localStorage 获取最新配置
+        const savedConfigs = localStorage.getItem('dataSourceConfigs');
+        const currentConfigs = savedConfigs ? JSON.parse(savedConfigs) : dataSourceConfigs;
+        const updatedConfigs = currentConfigs.map((c: DataSourceConfig) =>
+          c.id === config.id ? { ...c, tables } : c
+        );
+        saveDataSourceConfigs(updatedConfigs);
       } else {
-        setDataSources([]);
+        console.error('连接失败:', response.message);
       }
     } catch (error) {
-      console.error('加载数据源失败:', error);
-      setDataSources([]);
+      console.error('加载表结构失败:', error);
     } finally {
       setLoading(false);
     }
   };
 
+  // 切换数据源
+  const handleSelectDataSource = async (configId: string) => {
+    setSelectedDataSourceId(configId);
+    // 直接从当前的 dataSourceConfigs 中查找（使用函数式更新可能获取到旧值）
+    // 所以我们需要重新从 localStorage 获取最新的配置
+    const savedConfigs = localStorage.getItem('dataSourceConfigs');
+    const configs = savedConfigs ? JSON.parse(savedConfigs) : dataSourceConfigs;
+    const config = configs.find((c: DataSourceConfig) => c.id === configId);
+
+    if (config) {
+      // 传递数据库信息给父组件
+      if (onDatabaseSelect) {
+        onDatabaseSelect(config.database);
+      }
+
+      if (config.tables && config.tables.length > 0) {
+        console.log('使用缓存的表结构:', config.tables.length, '个表');
+        setDataSources(config.tables);
+      } else {
+        console.log('从数据库加载表结构...');
+        await loadDataSourceTables(config);
+      }
+    }
+  };
+
+  // 删除数据源
+  const handleDeleteDataSource = (configId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updatedConfigs = dataSourceConfigs.filter(c => c.id !== configId);
+    saveDataSourceConfigs(updatedConfigs);
+
+    // 如果删除的是当前选中的数据源，清空表结构
+    if (selectedDataSourceId === configId) {
+      setSelectedDataSourceId(updatedConfigs.length > 0 ? updatedConfigs[0].id : null);
+      setDataSources(updatedConfigs.length > 0 && updatedConfigs[0].tables ? updatedConfigs[0].tables : []);
+    }
+  };
+
+  useEffect(() => {
+    loadDataSourceConfigs();
+  }, []);
+
+  // 当数据源配置加载完成后，自动加载选中数据源的表结构
+  useEffect(() => {
+    const loadTables = async () => {
+      // 等待 dataSourceConfigs 更新后再处理
+      if (dataSourceConfigs.length > 0) {
+        // 如果没有选中任何数据源，默认选中第一个
+        if (!selectedDataSourceId) {
+          setSelectedDataSourceId(dataSourceConfigs[0].id);
+        }
+
+        const config = dataSourceConfigs.find(c => c.id === (selectedDataSourceId || dataSourceConfigs[0].id));
+        if (config) {
+          if (config.tables && config.tables.length > 0) {
+            setDataSources(config.tables);
+            setLoading(false);
+          } else {
+            await loadDataSourceTables(config);
+          }
+        }
+      } else {
+        // 没有数据源时，也设置 loading 为 false
+        setLoading(false);
+      }
+    };
+    loadTables();
+  }, [dataSourceConfigs]);
+
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleTestConnection = async () => {
+    // 先校验所有字段
+    if (!validateFields()) {
+      return;
+    }
+
     try {
       setIsTestingConnection(true);
       setTestResult(null);
@@ -82,67 +232,139 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
         success: response.success,
         message: response.message
       });
+
+      // 如果连接成功且有数据源名称，则可以保存
+      if (response.success && dataSourceName.trim()) {
+        setCanSaveDataSource(true);
+      } else {
+        setCanSaveDataSource(false);
+      }
     } catch (error) {
       console.error('测试连接失败:', error);
       setTestResult({
         success: false,
         message: '连接失败: ' + (error as Error).message
       });
+      setCanSaveDataSource(false);
     } finally {
       setIsTestingConnection(false);
     }
   };
 
-  const handleConnectDatabase = async () => {
+  const [canSaveDataSource, setCanSaveDataSource] = useState(false);
+
+  // 字段校验状态
+  const [fieldErrors, setFieldErrors] = useState<{
+    name?: string;
+    host?: string;
+    port?: string;
+    username?: string;
+    database?: string;
+  }>({});
+
+  // 校验所有字段
+  const validateFields = (): boolean => {
+    const errors: typeof fieldErrors = {};
+
+    if (!dataSourceName.trim()) {
+      errors.name = '请输入数据源名称';
+    }
+
+    if (!dbConfig.host.trim()) {
+      errors.host = '请输入主机地址';
+    }
+
+    if (!dbConfig.port.trim()) {
+      errors.port = '请输入端口';
+    }
+
+    if (!dbConfig.username.trim()) {
+      errors.username = '请输入用户名';
+    }
+
+    if (!dbConfig.database.trim()) {
+      errors.database = '请输入数据库名称';
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  // 单个字段校验
+  const validateField = (field: keyof typeof fieldErrors, value: string) => {
+    const error = !value.trim() ? `请输入${field === 'name' ? '数据源名称' : field === 'host' ? '主机地址' : field === 'port' ? '端口' : field === 'username' ? '用户名' : '数据库名称'}` : '';
+    setFieldErrors(prev => ({ ...prev, [field]: error }));
+  };
+
+  // 添加数据源到列表
+  const handleAddDataSource = async () => {
+    if (!testResult?.success || !dataSourceName.trim()) {
+      return;
+    }
+
     try {
-      console.log('连接数据库配置:', dbConfig);
+      // 先连接数据库获取表结构
       const response = await api.connectDatabase(dbConfig);
 
-      if (response.success) {
-        console.log('数据库连接响应:', response);
+      let tables: DataSource[] = [];
+      if (response.success && response.tables) {
+        tables = response.tables.map((table: any) => ({
+          name: table.name,
+          table: table.name,
+          rows: 0,
+          columns: table.children || [],
+          description: `表 ${table.name}`,
+          source: 'mysql',
+          children: table.children,
+        }));
+      }
 
-        // 将数据库表添加到数据源列表
-        if (response.tables && response.tables.length > 0) {
-          const newDataSources = response.tables.map((table: any) => ({
-            name: table.name,
-            table: table.name,
-            rows: 0, // 可以从后端获取
-            columns: table.children || [],
-            description: `表 ${table.name}`,
-            source: 'mysql',
-            children: table.children // 保留原始children数据
-          }));
+      // 创建新的数据源配置
+      const newConfig: DataSourceConfig = {
+        id: generateId(),
+        name: dataSourceName.trim(),
+        host: dbConfig.host,
+        port: dbConfig.port,
+        username: dbConfig.username,
+        password: dbConfig.password,
+        database: dbConfig.database,
+        tables,
+        createdAt: Date.now(),
+      };
 
-          console.log('转换后的数据源:', newDataSources);
+      // 添加到列表
+      const updatedConfigs = [...dataSourceConfigs, newConfig];
+      saveDataSourceConfigs(updatedConfigs);
 
-          // 替换数据源（清除之前的连接）
-          setDataSources(newDataSources);
+      // 选中新添加的数据源
+      setSelectedDataSourceId(newConfig.id);
+      setDataSources(tables);
 
-          // 保存到localStorage
-          localStorage.setItem('dataSources', JSON.stringify(newDataSources));
+      // 关闭对话框并重置
+      setIsDbDialogOpen(false);
+      setTestResult(null);
+      setDataSourceName('');
+      setCanSaveDataSource(false);
+      setDbConfig({
+        host: 'localhost',
+        port: '3306',
+        username: 'root',
+        password: '',
+        database: '',
+      });
+
+      // 如果有表，自动选中第一个
+      if (tables.length > 0) {
+        const firstTable = tables[0].name;
+        setSelectedTable(firstTable);
+        setExpandedNodes(new Set(['数据库表']));
+        if (onTableSelect) {
+          onTableSelect(firstTable);
         }
-
-        setIsDbDialogOpen(false);
-        setTestResult(null);
-
-        // 如果有表,自动选中第一个表并展开
-        if (response.tables && response.tables.length > 0) {
-          const firstTable = response.tables[0].name;
-          setSelectedTable(firstTable);
-
-          // 展开"数据库表"节点
-          setExpandedNodes(new Set(['数据库表']));
-
-          if (onTableSelect) {
-            onTableSelect(firstTable);
-          }
-        }
-      } else {
-        alert('连接失败: ' + response.message);
       }
     } catch (error) {
-      console.error('连接数据库失败:', error);
-      alert('连接失败: ' + (error as Error).message);
+      console.error('添加数据源失败:', error);
+      alert('添加数据源失败: ' + (error as Error).message);
     }
   };
 
@@ -156,10 +378,15 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
     setExpandedNodes(newExpanded);
   };
 
-  const convertToTableNodes = (sources: DataSource[]): TableNode[] => {
+  const convertToTableNodes = (sources: DataSource[], dbName?: string): TableNode[] => {
+    // 获取当前选中数据源的数据库名称
+    const currentDbName = dbName || (selectedDataSourceId 
+      ? dataSourceConfigs.find(ds => ds.id === selectedDataSourceId)?.database 
+      : '数据库表');
+
     // 按source分组
     const grouped = sources.reduce((acc, source) => {
-      const category = source.source === 'upload' ? '上传的文件' : '数据库表';
+      const category = source.source === 'upload' ? '上传的文件' : (currentDbName || '数据库表');
       if (!acc[category]) {
         acc[category] = [];
       }
@@ -203,7 +430,12 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
     }));
   };
 
-  const filteredDataSources = convertToTableNodes(dataSources).filter(ds =>
+  // 获取当前选中数据源的数据库名称
+  const currentDbName = selectedDataSourceId 
+    ? dataSourceConfigs.find(ds => ds.id === selectedDataSourceId)?.database 
+    : undefined;
+
+  const filteredDataSources = convertToTableNodes(dataSources, currentDbName).filter(ds =>
     ds.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     ds.children?.some(table => table.name.toLowerCase().includes(searchQuery.toLowerCase()))
   );
@@ -324,46 +556,130 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
 
   return (
     <div className="h-full flex flex-col bg-[#0B0D1E] overflow-hidden">
-      {/* Header with Add Button */}
-      <div className="px-4 py-3 border-b border-white/5 flex-shrink-0 flex items-center justify-between">
-        <h2 className="text-cyan-400 font-medium text-sm">数据库</h2>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsDbDialogOpen(true)}
-            className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center transition-all group"
-            title="添加数据库"
-          >
-            <Plus className="w-4 h-4 text-gray-400 group-hover:text-cyan-400" />
-          </button>
-          <button
-            className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center transition-all group"
-            title="更多选项"
-          >
-            <svg className="w-4 h-4 text-gray-400 group-hover:text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-            </svg>
-          </button>
+      {/* Top: Data Source List */}
+      <div className="h-1/2 flex flex-col border-b border-white/10">
+        <div className="px-3 py-3 border-b border-white/5">
+          <div className="flex items-center gap-2 mb-2">
+            <Server className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="text-xs text-gray-400">数据源</span>
+            <button
+              onClick={() => {
+                setDbConfig({
+                  host: 'localhost',
+                  port: '3306',
+                  username: 'root',
+                  password: '',
+                  database: '',
+                });
+                setDataSourceName('');
+                setTestResult(null);
+                setCanSaveDataSource(false);
+                setFieldErrors({});
+                setIsDbDialogOpen(true);
+              }}
+              className="ml-auto w-6 h-6 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center transition-all group"
+              title="添加数据源"
+            >
+              <Plus className="w-3 h-3 text-gray-400 group-hover:text-cyan-400" />
+            </button>
+          </div>
+
+          {/* Search Data Source */}
+          <div className="relative mb-2">
+            <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-500" />
+            <Input
+              placeholder="搜索数据源..."
+              value={dataSourceSearchQuery}
+              onChange={(e) => setDataSourceSearchQuery(e.target.value)}
+              className="pl-7 h-8 bg-[#13152E] border-white/5 text-gray-300 placeholder-gray-600 text-xs rounded-lg focus:border-cyan-500/30"
+            />
+          </div>
+
+          {/* Data Source List */}
+          <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+            {dataSourceConfigs
+              .filter(ds => ds.name.toLowerCase().includes(dataSourceSearchQuery.toLowerCase()))
+              .map(ds => (
+                <div
+                  key={ds.id}
+                  onClick={() => handleSelectDataSource(ds.id)}
+                  className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-all ${
+                    selectedDataSourceId === ds.id
+                      ? 'bg-cyan-500/20 border border-cyan-500/30'
+                      : 'hover:bg-white/5 border border-transparent'
+                  }`}
+                >
+                  <Database className={`w-3 h-3 flex-shrink-0 ${selectedDataSourceId === ds.id ? 'text-cyan-400' : 'text-gray-500'}`} />
+                  <span className={`text-xs truncate flex-1 ${selectedDataSourceId === ds.id ? 'text-cyan-300' : 'text-gray-400'}`}>
+                    {ds.name}
+                  </span>
+                  <span className="text-[10px] text-gray-600">{ds.host}</span>
+                  <button
+                    onClick={(e) => handleDeleteDataSource(ds.id, e)}
+                    className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded hover:bg-red-500/20 flex items-center justify-center transition-all"
+                    title="删除数据源"
+                  >
+                    <Trash2 className="w-3 h-3 text-red-400" />
+                  </button>
+                </div>
+              ))}
+            {dataSourceConfigs.length === 0 && (
+              <div className="text-center py-4">
+                <p className="text-gray-500 text-xs">暂无数据源</p>
+                <p className="text-gray-600 text-[10px]">点击 + 添加数据源</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Search */}
-      <div className="px-3 py-3 border-b border-white/5">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
-          <Input
-            placeholder="搜索表或段..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 h-9 bg-[#13152E] border-white/5 text-gray-300 placeholder-gray-600 text-sm rounded-lg focus:border-cyan-500/30"
-          />
+      {/* Bottom: Table List */}
+      <div className="h-1/2 flex flex-col">
+        {/* Header with Add Button */}
+        <div className="px-4 py-3 border-b border-white/5 flex-shrink-0 flex items-center justify-between">
+          <h2 className="text-cyan-400 font-medium text-sm">数据库表</h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setDbConfig({
+                  host: 'localhost',
+                  port: '3306',
+                  username: 'root',
+                  password: '',
+                  database: '',
+                });
+                setDataSourceName('');
+                setTestResult(null);
+                setCanSaveDataSource(false);
+                setFieldErrors({});
+                setIsDbDialogOpen(true);
+              }}
+              className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center transition-all group"
+              title="添加数据库"
+            >
+              <Plus className="w-4 h-4 text-gray-400 group-hover:text-cyan-400" />
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Data Sources List */}
-      <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2">
+        {/* Search */}
+        <div className="px-3 py-2 border-b border-white/5 flex-shrink-0">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+            <Input
+              placeholder="搜索表或段..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 h-8 bg-[#13152E] border-white/5 text-gray-300 placeholder-gray-600 text-sm rounded-lg focus:border-cyan-500/30"
+            />
+          </div>
+        </div>
+
         {/* Table Tree */}
-        <div className="space-y-1">
-          {filteredDataSources.map(ds => renderTreeNode(ds, 0))}
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          <div className="space-y-1">
+            {filteredDataSources.map(ds => renderTreeNode(ds, 0))}
+          </div>
         </div>
       </div>
 
@@ -380,45 +696,91 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
 
           {/* Content */}
           <div className="px-6 py-6 space-y-4 max-h-[60vh] overflow-y-auto">
+            {/* Data Source Name */}
+            <div>
+              <label className="text-sm text-gray-400 mb-2 block">
+                数据源名称 <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={dataSourceName}
+                onChange={(e) => {
+                  setDataSourceName(e.target.value);
+                  validateField('name', e.target.value);
+                  // 清除之前的保存状态
+                  if (testResult?.success) {
+                    setCanSaveDataSource(false);
+                  }
+                }}
+                onBlur={(e) => validateField('name', e.target.value)}
+                className={`w-full bg-[#1a1d2e] border ${fieldErrors.name ? 'border-red-500' : 'border-white/10'} text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30`}
+                placeholder="例如：生产数据库"
+              />
+              {fieldErrors.name && <p className="text-red-500 text-xs mt-1">{fieldErrors.name}</p>}
+            </div>
+
             {/* Host */}
             <div>
-              <label className="text-sm text-gray-400 mb-2 block">主机地址</label>
+              <label className="text-sm text-gray-400 mb-2 block">
+                主机地址 <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={dbConfig.host}
-                onChange={(e) => setDbConfig({ ...dbConfig, host: e.target.value })}
-                className="w-full bg-[#1a1d2e] border border-white/10 text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                onChange={(e) => {
+                  setDbConfig({ ...dbConfig, host: e.target.value });
+                  validateField('host', e.target.value);
+                }}
+                onBlur={(e) => validateField('host', e.target.value)}
+                className={`w-full bg-[#1a1d2e] border ${fieldErrors.host ? 'border-red-500' : 'border-white/10'} text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30`}
                 placeholder="localhost"
               />
+              {fieldErrors.host && <p className="text-red-500 text-xs mt-1">{fieldErrors.host}</p>}
             </div>
 
             {/* Port */}
             <div>
-              <label className="text-sm text-gray-400 mb-2 block">端口</label>
+              <label className="text-sm text-gray-400 mb-2 block">
+                端口 <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={dbConfig.port}
-                onChange={(e) => setDbConfig({ ...dbConfig, port: e.target.value })}
-                className="w-full bg-[#1a1d2e] border border-white/10 text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                onChange={(e) => {
+                  setDbConfig({ ...dbConfig, port: e.target.value });
+                  validateField('port', e.target.value);
+                }}
+                onBlur={(e) => validateField('port', e.target.value)}
+                className={`w-full bg-[#1a1d2e] border ${fieldErrors.port ? 'border-red-500' : 'border-white/10'} text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30`}
                 placeholder="3306"
               />
+              {fieldErrors.port && <p className="text-red-500 text-xs mt-1">{fieldErrors.port}</p>}
             </div>
 
             {/* Username */}
             <div>
-              <label className="text-sm text-gray-400 mb-2 block">用户名</label>
+              <label className="text-sm text-gray-400 mb-2 block">
+                用户名 <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={dbConfig.username}
-                onChange={(e) => setDbConfig({ ...dbConfig, username: e.target.value })}
-                className="w-full bg-[#1a1d2e] border border-white/10 text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                onChange={(e) => {
+                  setDbConfig({ ...dbConfig, username: e.target.value });
+                  validateField('username', e.target.value);
+                }}
+                onBlur={(e) => validateField('username', e.target.value)}
+                className={`w-full bg-[#1a1d2e] border ${fieldErrors.username ? 'border-red-500' : 'border-white/10'} text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30`}
                 placeholder="root"
               />
+              {fieldErrors.username && <p className="text-red-500 text-xs mt-1">{fieldErrors.username}</p>}
             </div>
 
             {/* Password */}
             <div>
-              <label className="text-sm text-gray-400 mb-2 block">密码</label>
+              <label className="text-sm text-gray-400 mb-2 block">
+                密码 <span className="text-red-500">*</span>
+              </label>
               <input
                 type="password"
                 value={dbConfig.password}
@@ -430,14 +792,21 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
 
             {/* Database */}
             <div>
-              <label className="text-sm text-gray-400 mb-2 block">数据库名称（可选）</label>
+              <label className="text-sm text-gray-400 mb-2 block">
+                数据库名称 <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={dbConfig.database}
-                onChange={(e) => setDbConfig({ ...dbConfig, database: e.target.value })}
-                className="w-full bg-[#1a1d2e] border border-white/10 text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
-                placeholder="留空则显示所有数据库"
+                onChange={(e) => {
+                  setDbConfig({ ...dbConfig, database: e.target.value });
+                  validateField('database', e.target.value);
+                }}
+                onBlur={(e) => validateField('database', e.target.value)}
+                className={`w-full bg-[#1a1d2e] border ${fieldErrors.database ? 'border-red-500' : 'border-white/10'} text-gray-200 h-10 px-3 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/30`}
+                placeholder="例如：my_database"
               />
+              {fieldErrors.database && <p className="text-red-500 text-xs mt-1">{fieldErrors.database}</p>}
             </div>
 
             {/* Test Result */}
@@ -478,7 +847,7 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
           <div className="px-6 py-4 border-t border-white/10 bg-[#23252F] flex items-center justify-between">
             <Button
               onClick={handleTestConnection}
-              disabled={isTestingConnection}
+              disabled={isTestingConnection || !dataSourceName.trim() || !dbConfig.host.trim() || !dbConfig.port.trim() || !dbConfig.username.trim() || !dbConfig.database.trim()}
               variant="outline"
               className="bg-transparent border-white/20 hover:bg-white/5 text-gray-300 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -499,6 +868,9 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
                 onClick={() => {
                   setIsDbDialogOpen(false);
                   setTestResult(null);
+                  setDataSourceName('');
+                  setCanSaveDataSource(false);
+                  setFieldErrors({});
                 }}
                 variant="outline"
                 className="bg-transparent border-white/20 hover:bg-white/5 text-gray-300 hover:text-white"
@@ -506,10 +878,11 @@ export function DataSourcePanel({ onTableSelect }: DataSourcePanelProps) {
                 取消
               </Button>
               <Button
-                onClick={handleConnectDatabase}
-                className="bg-purple-600 hover:bg-purple-500 text-white border-0"
+                onClick={handleAddDataSource}
+                disabled={!canSaveDataSource}
+                className="bg-purple-600 hover:bg-purple-500 text-white border-0 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                保存
+                保存到列表
               </Button>
             </div>
           </div>

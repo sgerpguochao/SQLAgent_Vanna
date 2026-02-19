@@ -7,10 +7,11 @@ import { api } from '../services/api';
 
 interface QueryPanelProps {
   selectedTable?: string | null;
+  selectedDatabase?: string | null;
   onQueryResult?: (result: any) => void;
 }
 
-export function QueryPanel({ selectedTable, onQueryResult }: QueryPanelProps) {
+export function QueryPanel({ selectedTable, selectedDatabase, onQueryResult }: QueryPanelProps) {
   const [showSQL, setShowSQL] = useState(false);
   const [generatedSQL, setGeneratedSQL] = useState('');
   const [isQuerying, setIsQuerying] = useState(false);
@@ -32,6 +33,12 @@ export function QueryPanel({ selectedTable, onQueryResult }: QueryPanelProps) {
   }, [selectedTable]);
 
   const handleRun = async () => {
+    // 检查是否选择了数据库
+    if (!selectedDatabase) {
+      alert('请先在左侧选择一个数据源（数据库）');
+      return;
+    }
+
     if (!selectedTable) {
       alert('请先在左侧选择一个数据表');
       return;
@@ -39,6 +46,22 @@ export function QueryPanel({ selectedTable, onQueryResult }: QueryPanelProps) {
 
     if (!sqlQuery.trim()) {
       alert('请输入SQL查询语句');
+      return;
+    }
+
+    // 检查SQL语句中是否包含LIMIT
+    const sqlUpper = sqlQuery.toUpperCase();
+    const limitMatch = sqlUpper.match(/LIMIT\s+(\d+)/i);
+
+    if (!limitMatch) {
+      alert('SQL查询语句必须包含LIMIT限制返回条数');
+      return;
+    }
+
+    // 检查LIMIT后面的数字是否超过100
+    const limitValue = parseInt(limitMatch[1], 10);
+    if (limitValue > 100) {
+      alert('LIMIT限制的条数不能超过100，请修改SQL语句');
       return;
     }
 
