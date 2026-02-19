@@ -221,6 +221,30 @@ vannadoc_schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, d
 
 ---
 
+### 3.4 vannaplan 集合（新增）
+
+用于存储业务分析主题。
+
+```python
+# milvus_vector.py (新增)
+vannaplan_schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True)
+vannaplan_schema.add_field(field_name="topic", datatype=DataType.VARCHAR, max_length=65535)
+vannaplan_schema.add_field(field_name="db_name", datatype=DataType.VARCHAR, max_length=255)
+vannaplan_schema.add_field(field_name="tables", datatype=DataType.VARCHAR, max_length=65535)
+vannaplan_schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self._embedding_dim)
+```
+
+**字段说明**:
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | VARCHAR | 唯一标识，使用 UUID + "-plan" 后缀 |
+| topic | VARCHAR | 业务分析主题描述 |
+| db_name | VARCHAR | 数据库名称 |
+| tables | VARCHAR | 关联的数据表（逗号分隔） |
+| vector | FLOAT_VECTOR | topic 字段的向量嵌入 |
+
+---
+
 ## 四、核心代码文件汇总
 
 | 层级 | 文件 | 作用 |

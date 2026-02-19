@@ -51,12 +51,12 @@ class ChatResponse(BaseModel):
 
 class TrainingDataRequest(BaseModel):
     """添加训练数据请求"""
-    data_type: str = Field(..., description="数据类型: 'sql', 'ddl', 'documentation'")
+    data_type: str = Field(..., description="数据类型: 'sql', 'ddl', 'documentation', 'plan'")
     content: Any = Field(..., description="训练数据内容（str 或 List[str]）")
     question: Optional[str] = Field(None, description="问题（仅 SQL 类型需要）")
     db_name: Optional[str] = Field("", description="数据库名称")
     table_name: Optional[str] = Field("", description="表名称（ddl/doc类型使用）")
-    tables: Optional[str] = Field("", description="涉及的数据表（sql类型使用，逗号分隔）")
+    tables: Optional[str] = Field("", description="涉及的数据表（sql/plan类型使用，逗号分隔）")
 
 class TrainingDataResponse(BaseModel):
     """训练数据响应"""
@@ -629,8 +629,16 @@ async def add_training_data(request: TrainingDataRequest):
             )
             if isinstance(ids, str):
                 ids = [ids]
+        elif request.data_type == "plan":
+            ids = vn.add_plan(
+                request.content,
+                db_name=request.db_name,
+                tables=request.tables
+            )
+            if isinstance(ids, str):
+                ids = [ids]
         else:
-            raise HTTPException(status_code=400, detail="Invalid data_type, must be 'sql', 'ddl', or 'documentation'")
+            raise HTTPException(status_code=400, detail="Invalid data_type, must be 'sql', 'ddl', 'documentation', or 'plan'")
         
         return TrainingDataResponse(
             success=True,
@@ -672,6 +680,9 @@ async def get_training_data(
             # 如果 content 包含 CREATE TABLE，说明是 DDL
             elif 'content' in row.index and pd.notna(row['content']) and 'CREATE TABLE' in str(row['content']).upper():
                 return 'ddl'
+            # 如果有 tables 字段且不为空，且不是 SQL 类型（question为空），说明是 plan 类型
+            elif 'tables' in row.index and pd.notna(row['tables']) and row['tables']:
+                return 'plan'
             # 否则判断为文档
             elif 'content' in row.index and pd.notna(row['content']):
                 return 'documentation'
@@ -686,7 +697,8 @@ async def get_training_data(
                 'sql': '-sql',
                 'ddl': '-ddl',
                 'doc': '-doc',
-                'documentation': '-doc'
+                'documentation': '-doc',
+                'plan': '-plan'
             }
             suffix = suffix_map.get(data_type.lower())
             if suffix:

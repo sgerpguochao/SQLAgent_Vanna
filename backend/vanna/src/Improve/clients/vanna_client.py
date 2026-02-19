@@ -221,6 +221,56 @@ class MyVanna(Milvus_VectorStore, OpenAI_Chat):
             logger.info(f"Successfully inserted {len(insert_data)} new DDLs in batch")
 
         return ddl_ids[0] if is_single else ddl_ids
+
+    def add_plan(self, topic: Union[str, List[str]], **kwargs) -> Union[str, List[str]]:
+        """
+        添加业务分析主题到 vannaplan 集合
+
+        Args:
+            topic: 业务分析主题（str 或 List[str]）
+
+        Returns:
+            str 或 List[str]: plan ID
+        """
+        is_single = isinstance(topic, str)
+        topics = [topic] if is_single else topic
+
+        if not topics or (is_single and len(topic) == 0):
+            raise Exception("topic can not be null")
+
+        db_name = kwargs.get("db_name", "")
+        tables = kwargs.get("tables", "")
+
+        plan_ids = [self._get_content_hash(t).replace("-hash", "-plan") for t in topics]
+        exists_map = self._check_exists_by_ids("vannaplan", plan_ids)
+
+        to_insert = []
+        for t, plan_id in zip(topics, plan_ids):
+            if exists_map.get(plan_id, False):
+                logger.info(f"Plan already exists: {plan_id[:20]}...")
+            else:
+                to_insert.append((t, plan_id))
+
+        if to_insert:
+            texts = [t for t, _ in to_insert]
+            logger.info(f"Generating {len(texts)} plan embeddings in batch...")
+            embeddings = self.embedding_function.encode_documents(texts)
+
+            insert_data = [
+                {
+                    "id": plan_id,
+                    "topic": t,
+                    "db_name": db_name,
+                    "tables": tables,
+                    "vector": embedding.tolist() if hasattr(embedding, 'tolist') else embedding
+                }
+                for (t, plan_id), embedding in zip(to_insert, embeddings)
+            ]
+
+            self.milvus_client.insert(collection_name="vannaplan", data=insert_data)
+            logger.info(f"Successfully inserted {len(insert_data)} new plans in batch")
+
+        return plan_ids[0] if is_single else plan_ids
     
     # ==================== 重写 train 方法 ====================
     def train(
@@ -332,7 +382,7 @@ class MyVanna(Milvus_VectorStore, OpenAI_Chat):
             # 支持 -hash 后缀（改进版）
             if id.endswith("-hash"):
                 # 需要查询该 ID 属于哪个集合
-                for collection_name in ["vannasql", "vannaddl", "vannadoc"]:
+                for collection_name in ["vannasql", "vannaddl", "vannadoc", "vannaplan"]:
                     try:
                         # 尝试查询该 ID 是否存在
                         result = self.milvus_client.query(
@@ -369,6 +419,10 @@ class MyVanna(Milvus_VectorStore, OpenAI_Chat):
             elif id.endswith("-doc"):
                 self.milvus_client.delete(collection_name="vannadoc", ids=[id])
                 logger.info(f"Successfully deleted ID from vannadoc: {id}")
+                return True
+            elif id.endswith("-plan"):
+                self.milvus_client.delete(collection_name="vannaplan", ids=[id])
+                logger.info(f"Successfully deleted ID from vannaplan: {id}")
                 return True
             else:
                 logger.warning(f"Deletion failed: Invalid ID format {id}")

@@ -42,7 +42,9 @@ FROM fact_sales_electronics f
 JOIN dim_product p ON f.product_sk = p.product_sk
 GROUP BY p.brand
 ORDER BY total_quantity DESC
-LIMIT 10`
+LIMIT 10`,
+
+  plan: `客户购买行为分析：分析客户的购买频次、购买金额、购买商品类别等，用于精准营销和客户分层`
 };
 
 interface TrainingDataPanelProps {
@@ -72,7 +74,7 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
   const [selectedDbName, setSelectedDbName] = useState<string>('');
 
   // 添加表单状态
-  const [dataType, setDataType] = useState<'documentation' | 'ddl' | 'sql'>('sql');
+  const [dataType, setDataType] = useState<'documentation' | 'ddl' | 'sql' | 'plan'>('sql');
   const [content, setContent] = useState('');
   const [question, setQuestion] = useState('');
   const [tableName, setTableName] = useState('');
@@ -141,8 +143,8 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
       };
 
       // 根据类型添加不同字段
-      if (dataType === 'sql') {
-        requestBody.question = question;
+      if (dataType === 'sql' || dataType === 'plan') {
+        requestBody.question = dataType === 'sql' ? question : content; // plan 使用 content 作为 topic
         requestBody.tables = tables || '';
       } else if (dataType === 'ddl' || dataType === 'documentation') {
         requestBody.table_name = tableName || '';
@@ -213,9 +215,13 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
 
   // 使用示例模板
   const useTemplate = () => {
-    setContent(EXAMPLE_TEMPLATES[dataType]);
-    if (dataType === 'sql') {
-      setQuestion('哪个品牌销量最高？');
+    if (dataType === 'plan') {
+      setContent(EXAMPLE_TEMPLATES.plan);
+    } else {
+      setContent(EXAMPLE_TEMPLATES[dataType]);
+      if (dataType === 'sql') {
+        setQuestion('哪个品牌销量最高？');
+      }
     }
   };
 
@@ -264,6 +270,7 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
     sql: trainingData.filter(item => item.data_type === 'sql').length,
     ddl: trainingData.filter(item => item.data_type === 'ddl').length,
     documentation: trainingData.filter(item => item.data_type === 'documentation').length,
+    plan: trainingData.filter(item => item.data_type === 'plan').length,
   };
 
   return (
@@ -302,7 +309,7 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-5 gap-4">
           <div className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-lg p-4">
             <div className="text-2xl font-bold text-cyan-400">{stats.total}</div>
             <div className="text-xs text-gray-400 mt-1">总数据量</div>
@@ -318,6 +325,10 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
           <div className="bg-gradient-to-br from-emerald-500/10 to-green-500/10 border border-emerald-500/20 rounded-lg p-4">
             <div className="text-2xl font-bold text-emerald-400">{stats.documentation}</div>
             <div className="text-xs text-gray-400 mt-1">表文档</div>
+          </div>
+          <div className="bg-gradient-to-br from-orange-500/10 to-red-500/10 border border-orange-500/20 rounded-lg p-4">
+            <div className="text-2xl font-bold text-orange-400">{stats.plan}</div>
+            <div className="text-xs text-gray-400 mt-1">主题规划</div>
           </div>
         </div>
 
@@ -344,6 +355,7 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
                 <SelectItem value="sql">SQL 查询</SelectItem>
                 <SelectItem value="ddl">DDL 结构</SelectItem>
                 <SelectItem value="documentation">表文档</SelectItem>
+                <SelectItem value="plan">主题规划</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -397,6 +409,7 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
                       <SelectItem value="sql">SQL (示例查询)</SelectItem>
                       <SelectItem value="ddl">DDL (表结构)</SelectItem>
                       <SelectItem value="documentation">Documentation (表文档)</SelectItem>
+                      <SelectItem value="plan">Plan (主题规划)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -415,7 +428,7 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
                 )}
 
                 {/* SQL 类型：涉及的数据表 */}
-                {dataType === 'sql' && (
+                {(dataType === 'sql' || dataType === 'plan') && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-gray-300">涉及的数据表</label>
                     <Input
@@ -523,6 +536,7 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
                     <span className={`text-xs px-3 py-1 rounded-full font-medium ${
                       item.data_type === 'sql' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
                       item.data_type === 'ddl' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
+                      item.data_type === 'plan' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
                       'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                     }`}>
                       {item.data_type.toUpperCase()}
@@ -577,17 +591,20 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
                       <span className={`text-xs px-2 py-1 rounded ${
                         itemToDelete.data_type === 'sql' ? 'bg-blue-500/20 text-blue-400' :
                         itemToDelete.data_type === 'ddl' ? 'bg-purple-500/20 text-purple-400' :
+                        itemToDelete.data_type === 'plan' ? 'bg-orange-500/20 text-orange-400' :
                         'bg-emerald-500/20 text-emerald-400'
                       }`}>
                         {itemToDelete.data_type.toUpperCase()}
                       </span>
-                      {itemToDelete.question && (
+                      {itemToDelete.data_type === 'sql' && itemToDelete.question && (
                         <span className="text-xs text-gray-400">问题: {itemToDelete.question}</span>
                       )}
+                      {itemToDelete.data_type === 'plan' && itemToDelete.tables && (
+                        <span className="text-xs text-gray-400">表: {itemToDelete.tables}</span>
+                      )}
                     </div>
-                    <pre className="text-xs text-gray-500 bg-[#0A0B1E] p-2 rounded max-h-[100px] overflow-y-auto font-mono">
-                      {itemToDelete.content.substring(0, 200)}
-                      {itemToDelete.content.length > 200 && '...'}
+                    <pre className="text-xs text-gray-500 bg-[#0A0B1E] p-2 rounded max-h-[80px] overflow-y-auto font-mono whitespace-pre-wrap">
+                      {itemToDelete.content.length > 150 ? itemToDelete.content.substring(0, 150) + '...' : itemToDelete.content}
                     </pre>
                   </div>
                   <p className="text-red-400 text-sm font-medium">

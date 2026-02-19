@@ -79,6 +79,7 @@ class Milvus_VectorStore(VannaBase):
         self._create_sql_collection("vannasql")
         self._create_ddl_collection("vannaddl")
         self._create_doc_collection("vannadoc")
+        self._create_plan_collection("vannaplan")
 
 
     def generate_embedding(self, data: str, **kwargs) -> List[float]:
@@ -167,6 +168,33 @@ class Milvus_VectorStore(VannaBase):
             )
             logger.info(f"Created collection: {name}（metric_type={self.metric_type}）")
 
+    def _create_plan_collection(self, name: str):
+        if not self.milvus_client.has_collection(collection_name=name):
+            vannaplan_schema = MilvusClient.create_schema(
+                auto_id=False,
+                enable_dynamic_field=False,
+            )
+            vannaplan_schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True)
+            vannaplan_schema.add_field(field_name="topic", datatype=DataType.VARCHAR, max_length=65535)
+            vannaplan_schema.add_field(field_name="db_name", datatype=DataType.VARCHAR, max_length=255)
+            vannaplan_schema.add_field(field_name="tables", datatype=DataType.VARCHAR, max_length=65535)
+            vannaplan_schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self._embedding_dim)
+
+            vannaplan_index_params = self.milvus_client.prepare_index_params()
+            vannaplan_index_params.add_index(
+                field_name="vector",
+                index_name="vector",
+                index_type="AUTOINDEX",
+                metric_type=self.metric_type,
+            )
+            self.milvus_client.create_collection(
+                collection_name=name,
+                schema=vannaplan_schema,
+                index_params=vannaplan_index_params,
+                consistency_level="Strong"
+            )
+            logger.info(f"Created collection: {name}（metric_type={self.metric_type}）")
+
     def add_question_sql(self, question: str, sql: str, **kwargs) -> str:
         if len(question) == 0 or len(sql) == 0:
             raise Exception("pair of question and sql can not be null")
@@ -225,6 +253,26 @@ class Milvus_VectorStore(VannaBase):
         )
         return _id
 
+    def add_plan(self, topic: str, **kwargs) -> str:
+        """添加业务分析主题到 vannaplan 集合"""
+        if len(topic) == 0:
+            raise Exception("topic can not be null")
+        _id = str(uuid.uuid4()) + "-plan"
+        embedding = self.embedding_function.encode_documents([topic])[0]
+        db_name = kwargs.get("db_name", "")
+        tables = kwargs.get("tables", "")
+        self.milvus_client.insert(
+            collection_name="vannaplan",
+            data={
+                "id": _id,
+                "topic": topic,
+                "db_name": db_name,
+                "tables": tables,
+                "vector": embedding
+            }
+        )
+        return _id
+
     def get_training_data(self, **kwargs) -> pd.DataFrame:
         sql_data = self.milvus_client.query(
             collection_name="vannasql",
@@ -276,6 +324,23 @@ class Milvus_VectorStore(VannaBase):
             }
         )
         df = pd.concat([df, df_doc])
+
+        plan_data = self.milvus_client.query(
+            collection_name="vannaplan",
+            output_fields=["*"],
+            limit=MAX_LIMIT_SIZE,
+        )
+
+        df_plan = pd.DataFrame(
+            {
+                "id": [doc["id"] for doc in plan_data],
+                "question": [None for doc in plan_data],
+                "content": [doc["topic"] for doc in plan_data],
+                "db_name": [doc.get("db_name", "") for doc in plan_data],
+                "tables": [doc.get("tables", "") for doc in plan_data],
+            }
+        )
+        df = pd.concat([df, df_plan])
         return df
 
     def get_similar_question_sql(self, question: str, **kwargs) -> list:
@@ -357,6 +422,9 @@ class Milvus_VectorStore(VannaBase):
             return True
         elif id.endswith("-doc"):
             self.milvus_client.delete(collection_name="vannadoc", ids=[id])
+            return True
+        elif id.endswith("-plan"):
+            self.milvus_client.delete(collection_name="vannaplan", ids=[id])
             return True
         else:
             return False

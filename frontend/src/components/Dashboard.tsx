@@ -134,6 +134,13 @@ export const Dashboard: React.FC = () => {
                         提供表的业务含义、字段说明等文档，帮助 AI 理解数据的业务含义。
                       </p>
                     </div>
+
+                    <div className="bg-[#13152E] rounded-lg p-3 border border-orange-500/20">
+                      <div className="font-medium text-orange-400 mb-2">🟠 主题规划</div>
+                      <p className="leading-relaxed">
+                        提供数据库内相关业务划分及其该业务所有含表，帮助AI理解数据业务所关联的表信息。
+                      </p>
+                    </div>
                   </div>
                 </div>
 

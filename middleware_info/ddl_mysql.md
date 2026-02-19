@@ -169,6 +169,9 @@ columns: [dialect, db_name, topic, tables]
 | | table_name | VARCHAR | 表名称 |
 | **vannadoc** | db_name | VARCHAR | 数据库名称 |
 | | table_name | VARCHAR | 表名称 |
+| **vannaplan** (新增) | db_name | VARCHAR | 数据库名称 |
+| | topic | VARCHAR | 业务分析主题描述 |
+| | tables | VARCHAR | 关联的数据表（逗号分隔） |
 
 ---
 
@@ -193,8 +196,39 @@ columns: [dialect, db_name, topic, tables]
 │  - db_name    ──┼──▶ vannadoc.db_name (新增)                    │
 │  - table_name ──┼──▶ vannadoc.table_name (新增)                  │
 │  - document   ──┼──▶ vannadoc.doc                                │
+├─────────────────┼─────────────────────────────────────────────────┤
+│ plan.jsonl      │                                                 │
+│  - db_name    ──┼──▶ vannaplan.db_name (新增)                   │
+│  - topic      ──┼──▶ vannaplan.topic                             │
+│  - tables     ──┼──▶ vannaplan.tables (新增)                     │
 └─────────────────┴─────────────────────────────────────────────────┘
 ```
+
+---
+
+## vannaplan 集合（新增）
+
+### 用途
+业务分析主题，用于存储业务分析场景的描述信息，支持 RAG 检索。
+
+### 字段定义
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | VARCHAR | 唯一标识，使用 UUID + "-plan" 后缀 |
+| topic | VARCHAR | 业务分析主题描述 |
+| db_name | VARCHAR | 数据库名称 |
+| tables | VARCHAR | 关联的数据表（逗号分隔） |
+| vector | FLOAT_VECTOR | topic 字段的向量嵌入 |
+
+### 与 plan.jsonl 映射
+
+| plan.jsonl 字段 | vannaplan 字段 | 映射说明 |
+|-----------------|----------------|---------|
+| db_name | db_name | ✅ 已映射 |
+| topic | topic | ✅ 已映射 |
+| tables | tables | ✅ 已映射（array 转字符串） |
+| dialect | - | 暂未存储 |
 
 ---
 
