@@ -277,15 +277,55 @@ async def delete_training_data(request: DeleteTrainingDataRequest):
 |------|------|------|
 | **后端 API** | `backend/vanna/api_server.py` | 提供 REST 接口（添加/获取/删除/导入） |
 | **客户端封装** | `backend/vanna/src/Improve/clients/vanna_client.py` | 批量训练、删除逻辑 |
-| **向量存储** | `backend/vanna/src/vanna/milvus/milvus_vector.py` | Milvus 集合管理 |
+| **向量存储** | `backend/vanna/src/vanna/milvus/milvus_vector.py` | Milvus 集合管理（含 get_related_plan_tables） |
+| **表过滤工具** | `backend/vanna/src/Improve/tools/database_tools.py` | Plan 过滤和关键字过滤函数 |
 | **前端面板** | `frontend/src/components/TrainingDataPanel.tsx` | 训练数据管理 UI |
 | **前端配置** | `frontend/src/config/index.ts` | API 端点定义 |
 
 ---
 
-## 五、前端实现
+## 五、vannaplan 集合使用说明（新增）
 
-### 5.1 TrainingDataPanel 组件
+### 5.1 集合用途
+
+vannaplan 集合用于存储**业务分析主题**，通过主题与用户问题的相似度匹配，可以快速定位与问题相关的数据库表，从而实现精准的表结构过滤。
+
+### 5.2 使用场景
+
+在 `get_all_tables_info` 工具中，通过以下流程使用 vannaplan：
+
+```
+用户问题 → 向量检索 vannaplan → 提取 tables 字段 → 与 all_tables 取交集
+```
+
+### 5.3 get_related_plan_tables 方法
+
+**文件**: `backend/vanna/src/vanna/milvus/milvus_vector.py`
+
+```python
+def get_related_plan_tables(self, question: str, db_name: str, **kwargs) -> list:
+    """
+    从 vannaplan 集合中检索与问题相关的表名
+    - 相似度阈值: 0.75
+    - 返回数量: top 5
+    """
+```
+
+### 5.4 数据示例
+
+```json
+{
+  "topic": "产品销售与库存分析",
+  "db_name": "ai_sales_data",
+  "tables": "products,order_items"
+}
+```
+
+---
+
+## 六、前端实现
+
+### 6.1 TrainingDataPanel 组件
 
 **文件**: `frontend/src/components/TrainingDataPanel.tsx`
 
@@ -332,7 +372,7 @@ FROM sales GROUP BY brand`,
 
 ---
 
-## 六、批量导入数据文件格式
+## 七、批量导入数据文件格式
 
 ### 6.1 ddl.jsonl
 
@@ -376,7 +416,7 @@ FROM sales GROUP BY brand`,
 
 ---
 
-## 七、注意事项
+## 八、注意事项
 
 1. **向量维度**：所有集合的 vector 字段维度必须一致（由 embedding 模型决定）
 2. **ID 格式**：使用 MD5哈希 + 后缀（-sql/-ddl/-doc/-plan）区分集合
@@ -387,7 +427,7 @@ FROM sales GROUP BY brand`,
 
 ---
 
-## 八、测试验证结果
+## 九、测试验证结果
 
 ```
 Milvus集合统计:
@@ -409,7 +449,7 @@ Milvus集合统计:
 
 ---
 
-## 九、相关测试脚本
+## 十、相关测试脚本
 
 | 脚本 | 说明 |
 |------|------|
