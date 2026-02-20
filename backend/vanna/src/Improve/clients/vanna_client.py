@@ -42,25 +42,78 @@ class MyVanna(Milvus_VectorStore, OpenAI_Chat):
     - 使用哈希 ID 自动去重
     - 批量向量化，提升 10-100 倍性能
     - 支持自定义向量相似度度量方式（cosine, L2, IP）
+    - 修复数据库连接切换问题
     """
-    
+
     def __init__(self, config=None):
         """初始化 MyVanna"""
 
         # 优化：基于
         Milvus_VectorStore.__init__(self, config=config)
         OpenAI_Chat.__init__(self, config=config)
-        
+
         # 新增优化：支持自定义度量方式
         self.metric_type = config.get("metric_type", "COSINE")  # 默认 COSINE
-        
+
         # 验证 metric_type 合法性
         valid_metrics = ["L2", "IP", "COSINE"]
         if self.metric_type.upper() not in valid_metrics:
             raise ValueError(f"Invalid metric_type: {self.metric_type}. Must be one of {valid_metrics}")
-        
+
         self.metric_type = self.metric_type.upper()  # 统一转大写
         logger.info(f"Vector similarity metric type: {self.metric_type}")
+
+        # 修复数据库连接切换问题：保存连接和 run_sql 函数
+        self._mysql_conn = None
+        self._run_sql_func = None
+
+    def connect_to_mysql(self, host=None, dbname=None, user=None, password=None, port=None, **kwargs):
+        """
+        修复版的 connect_to_mysql 方法
+        保存数据库连接以便后续使用
+        """
+        import pymysql
+
+        if not host:
+            host = os.getenv("HOST")
+        if not dbname:
+            dbname = os.getenv("DATABASE")
+        if not user:
+            user = os.getenv("USER")
+        if not password:
+            password = os.getenv("PASSWORD")
+        if not port:
+            port = os.getenv("PORT")
+
+        # 创建新连接
+        self._mysql_conn = pymysql.connect(
+            host=host,
+            user=user,
+            password=password,
+            database=dbname,
+            port=int(port) if port else 3306,
+            **kwargs
+        )
+
+        # 保存 run_sql 函数
+        def run_sql_mysql(sql: str):
+            if self._mysql_conn:
+                try:
+                    self._mysql_conn.ping(reconnect=True)
+                    cs = self._mysql_conn.cursor()
+                    cs.execute(sql)
+                    results = cs.fetchall()
+                    import pandas as pd
+                    df = pd.DataFrame(results, columns=[desc[0] for desc in cs.description])
+                    return df
+                except Exception as e:
+                    self._mysql_conn.rollback()
+                    raise e
+            return None
+
+        self._run_sql_func = run_sql_mysql
+        self.run_sql = run_sql_mysql
+        logger.info(f"Connected to MySQL database: {dbname}")
 
     def _get_content_hash(self, text: str) -> str:
         """计算文本的 MD5 哈希值作为 ID"""
