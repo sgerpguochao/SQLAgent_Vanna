@@ -344,17 +344,33 @@ class Milvus_VectorStore(VannaBase):
         return df
 
     def get_similar_question_sql(self, question: str, **kwargs) -> list:
+        """
+        获取与问题相似的历史查询 SQL
+
+        Args:
+            question: 用户问题
+            db_name: 数据库名称（用于过滤）
+            top_k: 返回数量，默认 5
+        """
+        db_name = kwargs.get("db_name", "")
+        top_k = kwargs.get("top_k", 5)
+
         search_params = {
-            "metric_type": self.metric_type,  # 使用配置的 metric_type
+            "metric_type": self.metric_type,
             "params": {"nprobe": 128},
         }
         embeddings = self.embedding_function.encode_queries([question])
+
+        # 如果提供了 db_name，添加过滤条件
+        filter_expr = f'db_name == "{db_name}"' if db_name else None
+
         res = self.milvus_client.search(
             collection_name="vannasql",
             anns_field="vector",
             data=embeddings,
-            limit=self.n_results,
-            output_fields=["text", "sql"],
+            filter=filter_expr,
+            limit=top_k,
+            output_fields=["text", "sql", "db_name"],
             search_params=search_params
         )
         res = res[0]
@@ -369,41 +385,75 @@ class Milvus_VectorStore(VannaBase):
 
     def get_related_ddl(self, question: str, **kwargs) -> list:
         """
-        DDL 是 Data Definition Language（数据定义语言） 的缩写，用来定义和管理数据库对象的结构，比如数据库本身、表（table）、索引（index）、视图（view）等。
+        DDL 是 Data Definition Language（数据定义语言） 的缩写，用来定义和管理数据库对象的结构。
         通过 DDL 语句，可以创建、修改、删除数据库中的各种对象，从而实现对数据库的结构化管理。
+
+        Args:
+            question: 用户问题
+            db_name: 数据库名称（用于过滤）
+            threshold: 相似度阈值，默认 0.5
+            top_k: 返回数量，默认 5
         """
+        db_name = kwargs.get("db_name", "")
+        threshold = kwargs.get("threshold", 0.5)
+        top_k = kwargs.get("top_k", 5)
+
         search_params = {
-            "metric_type": self.metric_type,  # 使用配置的 metric_type
+            "metric_type": self.metric_type,
             "params": {"nprobe": 128},
         }
         embeddings = self.embedding_function.encode_queries([question])
+
+        # 如果提供了 db_name，添加过滤条件
+        filter_expr = f'db_name == "{db_name}"' if db_name else None
+
         res = self.milvus_client.search(
             collection_name="vannaddl",
             anns_field="vector",
             data=embeddings,
-            limit=self.n_results,
-            output_fields=["ddl"],
+            filter=filter_expr,
+            limit=top_k,
+            output_fields=["ddl", "db_name", "table_name"],
             search_params=search_params
         )
         res = res[0]
 
         list_ddl = []
         for doc in res:
-            list_ddl.append(doc["entity"]["ddl"])
+            distance = doc.get("distance", 0)
+            # 只有达到阈值的才返回
+            if distance >= threshold:
+                list_ddl.append(doc["entity"]["ddl"])
         return list_ddl
 
     def get_related_documentation(self, question: str, **kwargs) -> list:
+        """
+        获取与问题相关的业务文档
+
+        Args:
+            question: 用户问题
+            db_name: 数据库名称（用于过滤）
+            top_k: 返回数量，默认 5
+        """
+        db_name = kwargs.get("db_name", "")
+        top_k = kwargs.get("top_k", 5)
+
         search_params = {
-            "metric_type": self.metric_type,  # 使用配置的 metric_type
+            "metric_type": self.metric_type,
             "params": {"nprobe": 128},
         }
         embeddings = self.embedding_function.encode_queries([question])
+
+        # 如果提供了 db_name，添加过滤条件
+        filter_expr = f'db_name == "{db_name}"' if db_name else None
+
         res = self.milvus_client.search(
             collection_name="vannadoc",
             anns_field="vector",
             data=embeddings,
-            limit=self.n_results,
-            output_fields=["doc"],
+            filter=filter_expr,
+            limit=top_k,
+            output_fields=["doc", "db_name", "table_name"],
             search_params=search_params
         )
         res = res[0]
@@ -475,6 +525,88 @@ class Milvus_VectorStore(VannaBase):
 
         # 返回去重后的表名列表（保持原始大小写）
         return list(tables_set.values())
+
+    def _get_ddl_by_keywords(self, keywords: list, db_name: str = "", **kwargs) -> list:
+        """
+        通过关键词检索 DDL（支持 db_name 过滤）
+
+        Args:
+            keywords: 关键词列表
+            db_name: 数据库名称（用于过滤）
+            top_k: 返回数量，默认 5
+
+        Returns:
+            list: 相关的 DDL 列表
+        """
+        if not keywords:
+            return []
+
+        top_k = kwargs.get("top_k", 5)
+
+        # 构建过滤条件
+        filter_parts = []
+        if db_name:
+            filter_parts.append(f'db_name == "{db_name}"')
+
+        # 添加表名关键词过滤
+        for kw in keywords:
+            filter_parts.append(f'table_name like "%{kw}%"')
+
+        filter_expr = " and ".join(filter_parts) if filter_parts else None
+
+        try:
+            res = self.milvus_client.query(
+                collection_name="vannaddl",
+                filter=filter_expr,
+                limit=top_k,
+                output_fields=["ddl", "db_name", "table_name"]
+            )
+
+            return [doc["ddl"] for doc in res]
+        except Exception as e:
+            logger.warning(f"关键词检索 DDL 失败: {e}")
+            return []
+
+    def _get_doc_by_keywords(self, keywords: list, db_name: str = "", **kwargs) -> list:
+        """
+        通过关键词检索文档（支持 db_name 过滤）
+
+        Args:
+            keywords: 关键词列表
+            db_name: 数据库名称（用于过滤）
+            top_k: 返回数量，默认 5
+
+        Returns:
+            list: 相关的文档列表
+        """
+        if not keywords:
+            return []
+
+        top_k = kwargs.get("top_k", 5)
+
+        # 构建过滤条件
+        filter_parts = []
+        if db_name:
+            filter_parts.append(f'db_name == "{db_name}"')
+
+        # 添加表名关键词过滤
+        for kw in keywords:
+            filter_parts.append(f'table_name like "%{kw}%"')
+
+        filter_expr = " and ".join(filter_parts) if filter_parts else None
+
+        try:
+            res = self.milvus_client.query(
+                collection_name="vannadoc",
+                filter=filter_expr,
+                limit=top_k,
+                output_fields=["doc", "db_name", "table_name"]
+            )
+
+            return [doc["doc"] for doc in res]
+        except Exception as e:
+            logger.warning(f"关键词检索文档失败: {e}")
+            return []
 
     def remove_training_data(self, id: str, **kwargs) -> bool:
         if id.endswith("-sql"):
