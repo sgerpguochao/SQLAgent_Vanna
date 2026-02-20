@@ -219,6 +219,12 @@ export const api = {
   async connectDatabase(config: DatabaseConnectionConfig): Promise<DatabaseConnectionResponse> {
     const response = await apiClient.post('/api/v1/database/connect', config);
     return response;
+  },
+
+  // 获取已连接的数据库列表
+  async getConnectedDatabases(): Promise<{ success: boolean; databases: string[] }> {
+    const response = await apiClient.get('/api/v1/database/list');
+    return response;
   }
 };
 

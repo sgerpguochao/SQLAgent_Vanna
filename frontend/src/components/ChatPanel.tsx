@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Sparkles, Loader2, CheckCircle, Clock, ChevronDown, ChevronRight, BarChart3, FileText, Hash, TableIcon } from 'lucide-react';
+import { Send, Sparkles, Loader2, CheckCircle, Clock, ChevronDown, ChevronRight, BarChart3, FileText, Hash, TableIcon, Database, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
@@ -10,9 +10,17 @@ import remarkGfm from 'remark-gfm';
 import { api } from '../services/api';
 import { QueryResultDisplay } from './QueryResultDisplay';
 import { getApiUrl, API_ENDPOINTS } from '../config';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
 
 interface ChatPanelProps {
   selectedTable?: string | null;
+  selectedDatabase?: string | null;
   onQueryResult?: (result: any) => void;
 }
 
@@ -24,7 +32,7 @@ interface ThinkingStep {
   result?: string;  // 工具执行结果
 }
 
-export function ChatPanel({ selectedTable, onQueryResult }: ChatPanelProps) {
+export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: ChatPanelProps) {
   const [query, setQuery] = useState('');
   const [isQuerying, setIsQuerying] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
@@ -35,7 +43,30 @@ export function ChatPanel({ selectedTable, onQueryResult }: ChatPanelProps) {
   const [expandedStepIndex, setExpandedStepIndex] = useState<number | null>(null);  // 当前展开的步骤
   const [chartConfig, setChartConfig] = useState<any>(null);  // Chart.js 配置对象
   const [queryData, setQueryData] = useState<any>(null);  // 查询数据
+  const [chatDbName, setChatDbName] = useState<string>('');  // 对话选择的数据库
+  const [databaseList, setDatabaseList] = useState<string[]>([]);  // 已连接的数据库列表
+  const [isRefreshingDb, setIsRefreshingDb] = useState(false);  // 刷新数据库列表中
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // 刷新数据库列表
+  const refreshDatabaseList = async () => {
+    setIsRefreshingDb(true);
+    try {
+      const result = await api.getConnectedDatabases();
+      if (result.success && result.databases) {
+        const newList = result.databases;
+        setDatabaseList(newList);
+        // 如果当前选择的数据库不在新列表中，自动选中第一个
+        if (newList.length > 0 && !newList.includes(chatDbName)) {
+          setChatDbName(newList[0]);
+        }
+      }
+    } catch (e) {
+      console.error('刷新数据库列表失败:', e);
+    } finally {
+      setIsRefreshingDb(false);
+    }
+  };
 
   // 示例问题模板
   const exampleQuestions = [
@@ -60,6 +91,43 @@ export function ChatPanel({ selectedTable, onQueryResult }: ChatPanelProps) {
       }
     }
   }, [selectedTable]);
+
+  // 加载数据库列表
+  useEffect(() => {
+    const loadDatabases = async () => {
+      try {
+        const result = await api.getConnectedDatabases();
+        if (result.success && result.databases) {
+          setDatabaseList(result.databases);
+          // 如果有数据库且当前没有选中，自动选中第一个
+          if (result.databases.length > 0 && !chatDbName) {
+            setChatDbName(result.databases[0]);
+          }
+        }
+      } catch (e) {
+        console.error('从后端获取数据库列表失败:', e);
+        // 降级到从 localStorage 获取
+        try {
+          const configs = localStorage.getItem('dataSourceConfigs');
+          if (configs) {
+            const parsed = JSON.parse(configs);
+            const dbList = parsed.map((c: any) => c.database).filter(Boolean);
+            setDatabaseList([...new Set(dbList)]);
+          }
+        } catch (e2) {
+          console.error('读取数据库列表失败:', e2);
+        }
+      }
+    };
+    loadDatabases();
+  }, []);
+
+  // 当 selectedDatabase 变化时，更新 chatDbName
+  useEffect(() => {
+    if (selectedDatabase) {
+      setChatDbName(selectedDatabase);
+    }
+  }, [selectedDatabase]);
 
   const handleSend = async () => {
     if (!query.trim()) {
@@ -88,6 +156,7 @@ export function ChatPanel({ selectedTable, onQueryResult }: ChatPanelProps) {
         },
         body: JSON.stringify({
           question: query.trim(),
+          db_name: chatDbName || undefined,
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -367,6 +436,32 @@ export function ChatPanel({ selectedTable, onQueryResult }: ChatPanelProps) {
       {/* Input Area */}
       <div className="border-t border-white/5 px-4 py-4 flex-shrink-0">
         <div className="space-y-3">
+          {/* 数据库选择下拉框 */}
+          {databaseList.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Database className="w-4 h-4 text-cyan-400" />
+              <Select value={chatDbName} onValueChange={setChatDbName}>
+                <SelectTrigger className="bg-[#13152E] border-white/10 text-gray-300 w-[200px]">
+                  <SelectValue placeholder="选择数据库" />
+                </SelectTrigger>
+                <SelectContent>
+                  {databaseList.map((db) => (
+                    <SelectItem key={db} value={db}>
+                      {db}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <button
+                onClick={refreshDatabaseList}
+                disabled={isRefreshingDb}
+                className="p-1.5 rounded hover:bg-white/10 transition-colors text-gray-400 hover:text-cyan-400 disabled:opacity-50"
+                title="刷新数据库列表"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshingDb ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          )}
           <Textarea
             placeholder="输入您的问题，AI 将自动分析数据库、生成 SQL 并查询..."
             value={query}

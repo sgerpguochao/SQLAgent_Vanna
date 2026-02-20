@@ -14,6 +14,7 @@ import {
 } from './ui/dialog';
 import { toast } from 'sonner';
 import { getApiUrl, API_ENDPOINTS } from '../config';
+import { api } from '../services/api';
 
 // 示例数据模板（从 nl2sql_training_data.py 提取）
 const EXAMPLE_TEMPLATES = {
@@ -134,18 +135,26 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
     }
   };
 
-  // 从 localStorage 获取数据库列表
-  const loadDatabaseList = () => {
+  // 从后端获取数据库列表
+  const loadDatabaseList = async () => {
     try {
-      const configs = localStorage.getItem('dataSourceConfigs');
-      if (configs) {
-        const parsed = JSON.parse(configs);
-        // 提取数据库名称
-        const dbList = parsed.map((c: any) => c.database).filter(Boolean);
-        return [...new Set(dbList)]; // 去重
+      const result = await api.getConnectedDatabases();
+      if (result.success && result.databases) {
+        return result.databases;
       }
     } catch (e) {
-      console.error('读取数据库列表失败:', e);
+      console.error('从后端获取数据库列表失败:', e);
+      // 降级到从 localStorage 获取
+      try {
+        const configs = localStorage.getItem('dataSourceConfigs');
+        if (configs) {
+          const parsed = JSON.parse(configs);
+          const dbList = parsed.map((c: any) => c.database).filter(Boolean);
+          return [...new Set(dbList)];
+        }
+      } catch (e2) {
+        console.error('读取数据库列表失败:', e2);
+      }
     }
     return [];
   };
@@ -416,8 +425,9 @@ export function TrainingDataPanel({ selectedDatabase }: TrainingDataPanelProps) 
   useEffect(() => {
     loadTrainingData();
     // 加载数据库列表
-    const dbs = loadDatabaseList();
-    setDatabaseList(dbs);
+    loadDatabaseList().then(dbs => {
+      setDatabaseList(dbs);
+    });
     // 如果传入了 selectedDatabase，使用它
     if (selectedDatabase) {
       setSelectedDbName(selectedDatabase);

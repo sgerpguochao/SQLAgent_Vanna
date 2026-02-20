@@ -210,7 +210,7 @@ export const Dashboard: React.FC = () => {
 
             {/* Right Panel - Chat/Q&A */}
             <div className="w-[380px] flex-shrink-0 border-l border-white/5 bg-[#0B0D1E]">
-              <ChatPanel selectedTable={selectedTable} onQueryResult={handleQueryResult} />
+              <ChatPanel selectedTable={selectedTable} selectedDatabase={selectedDatabase} onQueryResult={handleQueryResult} />
             </div>
           </>
         ) : (

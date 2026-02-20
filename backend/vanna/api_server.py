@@ -136,12 +136,39 @@ llm = None  # LLM 实例
 # 数据库连接配置缓存 (db_name -> connection_config)
 db_connection_configs: Dict[str, Dict[str, Any]] = {}
 
+# 数据库连接配置持久化文件路径
+DB_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db_connections.json")
+
+def load_db_connections():
+    """从文件加载数据库连接配置"""
+    global db_connection_configs
+    if os.path.exists(DB_CONFIG_FILE):
+        try:
+            with open(DB_CONFIG_FILE, 'r') as f:
+                db_connection_configs = json.load(f)
+            logger.info(f"Loaded {len(db_connection_configs)} database connection configs from file")
+        except Exception as e:
+            logger.warning(f"Failed to load db connections: {e}")
+            db_connection_configs = {}
+
+def save_db_connections():
+    """保存数据库连接配置到文件"""
+    try:
+        with open(DB_CONFIG_FILE, 'w') as f:
+            json.dump(db_connection_configs, f)
+        logger.info(f"Saved {len(db_connection_configs)} database connection configs to file")
+    except Exception as e:
+        logger.warning(f"Failed to save db connections: {e}")
+
 # ==================== 初始化函数 ====================
 
 def initialize_system():
     """初始化 NL2SQL 系统"""
     global vn, agent, llm
-    
+
+    # 加载数据库连接配置
+    load_db_connections()
+
     # 禁用代理
     os.environ.pop("HTTP_PROXY", None)
     os.environ.pop("HTTPS_PROXY", None)
@@ -1187,6 +1214,8 @@ async def connect_database(request: DatabaseConnectionRequest):
                     "port": int(request.port)
                 }
                 logger.info(f"Cached connection config for database: {request.database}")
+                # 持久化到文件
+                save_db_connections()
 
             # 更新全局vn客户端连接
             if vn:
@@ -1229,6 +1258,19 @@ async def connect_database(request: DatabaseConnectionRequest):
     except Exception as e:
         logger.warning(f"Database connection failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Connection failed: {str(e)}")
+
+@app.get("/api/v1/database/list")
+async def get_connected_databases():
+    """
+    获取已连接的数据库列表
+
+    Returns:
+        已连接的数据库名称列表
+    """
+    return {
+        "success": True,
+        "databases": list(db_connection_configs.keys())
+    }
 
 @app.post("/api/query", response_model=QueryResponse)
 async def query_data(request: QueryRequest):

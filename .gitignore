@@ -30,6 +30,12 @@ package-lock.json
 .env.local
 .env.*.local
 
+# Database connections (contains sensitive credentials)
+backend/vanna/db_connections.json
+
+# Milvus deployment
+milvus-deployment/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -39,6 +45,9 @@ Thumbs.db
 
 # Cursor
 .cursor/
+
+# Vite
+frontend/src/vite-env.d.ts
 
 # Jupyter
 .ipynb_checkpoints/
