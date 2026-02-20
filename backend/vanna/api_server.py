@@ -43,6 +43,7 @@ load_dotenv()
 class ChatRequest(BaseModel):
     """对话请求"""
     question: str = Field(..., description="用户问题", json_schema_extra={"example": "女性客户的平均消费金额是多少？"})
+    db_name: Optional[str] = Field(None, description="数据库名称（用于切换数据库）")
     stream: bool = Field(default=False, description="是否流式返回")
     enable_training: bool = Field(default=False, description="是否启用训练决策")
 
@@ -100,7 +101,7 @@ class QueryResponse(BaseModel):
 class DatabaseConnectionRequest(BaseModel):
     """数据库连接请求"""
     host: str = Field(..., description="数据库主机地址")
-    port: str = Field(default="3306", description="数据库端口")
+    port: Optional[int] = Field(default=3306, description="数据库端口")
     username: str = Field(..., description="数据库用户名")
     password: str = Field(..., description="数据库密码")
     database: Optional[str] = Field(None, description="数据库名称(可选)")
@@ -390,25 +391,42 @@ async def chat(request: ChatRequest):
 async def chat_stream(request: ChatRequest):
     """
     流式对话接口 - 两阶段响应
-    
+
     第一阶段：实时推送 Agent 执行步骤
     第二阶段：流式返回最终答案
-    
+
     SSE 事件格式：
     - {"type": "step", "action": "查询数据库结构", "status": "进行中"}
     - {"type": "step", "action": "生成SQL查询", "status": "完成"}
     - {"type": "answer", "content": "女性客户的平均...", "done": false}
     - {"type": "done"}
-    
+
     Args:
         request: 对话请求
-        
+
     Returns:
         StreamingResponse: SSE 流式响应
     """
     if not agent:
         raise HTTPException(status_code=500, detail="System not initialized")
-    
+
+    # 如果请求中指定了 db_name，切换数据库连接
+    if request.db_name and vn:
+        try:
+            # 从缓存中获取数据库配置
+            if request.db_name in db_connection_configs:
+                config = db_connection_configs[request.db_name]
+                vn.connect_to_mysql(
+                    host=config.get("host", "localhost"),
+                    dbname=config.get("dbname", request.db_name),
+                    user=config.get("user", "root"),
+                    password=config.get("password", ""),
+                    port=config.get("port", 3306)
+                )
+                logger.info(f"切换到数据库: {request.db_name}")
+        except Exception as e:
+            logger.warning(f"切换数据库失败: {e}")
+
     async def generate():
         try:
             cfg = {
@@ -462,17 +480,21 @@ async def chat_stream(request: ChatRequest):
                         tool_result = None
 
                         # 查找 tool_start（获取描述）和 tool_end（获取耗时）
+                        tool_sql = None
                         for ui_event in ui_events:
                             if ui_event.get('name') == last_tool:
                                 if ui_event.get('kind') == 'tool_start':
                                     llm_description = ui_event.get('title', '')
                                 elif ui_event.get('kind') == 'tool_end':
                                     duration_ms = ui_event.get('duration_ms')
+                                    tool_sql = ui_event.get('sql')  # 获取 SQL 语句
+                                    # 优先使用 ui_events 中的简化输出
+                                    ui_output_brief = ui_event.get('output_brief')
 
-                        # 提取工具执行结果（截取前500字符避免过长）
+                        # 提取工具执行结果（始终使用原始 content，不截断）
                         tool_content = getattr(last_msg, 'content', '')
                         if tool_content:
-                            tool_result = tool_content[:500] if len(tool_content) > 500 else tool_content
+                            tool_result = tool_content  # 全部显示，不截取
 
                         # 先推送"进行中"状态（带 LLM 描述）
                         if llm_description:
@@ -493,6 +515,7 @@ async def chat_stream(request: ChatRequest):
                             'status': 'completed',
                             'duration_ms': duration_ms,
                             'result': tool_result,  # 添加工具执行结果
+                            'sql': tool_sql,  # 添加 SQL 语句（供前端显示）
                             'update': True  # 更新之前的状态
                         }
                         yield f"data: {json.dumps(step_data, ensure_ascii=False)}\n\n"
@@ -1265,11 +1288,24 @@ async def get_connected_databases():
     获取已连接的数据库列表
 
     Returns:
-        已连接的数据库名称列表
+        已连接的数据库名称列表及配置信息
     """
+    # 返回完整的数据库配置信息
+    databases = []
+    for db_name, config in db_connection_configs.items():
+        databases.append({
+            "name": db_name,
+            "host": config.get("host", ""),
+            "port": config.get("port", 3306),
+            "username": config.get("user", ""),
+            "password": config.get("password", ""),
+            "dbname": config.get("dbname", db_name),
+        })
+    
     return {
         "success": True,
-        "databases": list(db_connection_configs.keys())
+        "databases": list(db_connection_configs.keys()),
+        "database_configs": databases  # 返回完整配置信息
     }
 
 @app.post("/api/query", response_model=QueryResponse)

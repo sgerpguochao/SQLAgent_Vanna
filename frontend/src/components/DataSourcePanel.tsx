@@ -76,6 +76,43 @@ export function DataSourcePanel({ onTableSelect, onDatabaseSelect }: DataSourceP
   // 加载数据源配置列表
   const loadDataSourceConfigs = async () => {
     try {
+      setLoading(true);
+      
+      // 先从后端 API 获取已连接的数据库列表
+      try {
+        const result = await api.getConnectedDatabases();
+        if (result.success && result.database_configs && result.database_configs.length > 0) {
+          // 将后端返回的数据库配置转换为数据源配置
+          const configs: DataSourceConfig[] = result.database_configs.map((dbConfig: any, index: number) => ({
+            id: `db_${index}`,
+            name: dbConfig.name,
+            type: 'mysql',
+            host: dbConfig.host || '',
+            port: dbConfig.port || 3306,
+            username: dbConfig.username || '',
+            password: dbConfig.password || '',
+            database: dbConfig.dbname || dbConfig.name,
+          }));
+          
+          setDataSourceConfigs(configs);
+          
+          // 如果有数据库，自动选择第一个
+          if (configs.length > 0 && !selectedDataSourceId) {
+            setSelectedDataSourceId(configs[0].id);
+            // 立即加载第一个数据库的表结构
+            setTimeout(() => {
+              loadDataSourceTables(configs[0]);
+            }, 100);
+          }
+          
+          setLoading(false);
+          return;
+        }
+      } catch (apiError) {
+        console.warn('从后端获取数据库列表失败:', apiError);
+      }
+      
+      // 如果后端没有数据，回退到 localStorage
       const savedConfigs = localStorage.getItem('dataSourceConfigs');
       if (savedConfigs) {
         const configs = JSON.parse(savedConfigs);
@@ -147,11 +184,9 @@ export function DataSourcePanel({ onTableSelect, onDatabaseSelect }: DataSourceP
   // 切换数据源
   const handleSelectDataSource = async (configId: string) => {
     setSelectedDataSourceId(configId);
-    // 直接从当前的 dataSourceConfigs 中查找（使用函数式更新可能获取到旧值）
-    // 所以我们需要重新从 localStorage 获取最新的配置
-    const savedConfigs = localStorage.getItem('dataSourceConfigs');
-    const configs = savedConfigs ? JSON.parse(savedConfigs) : dataSourceConfigs;
-    const config = configs.find((c: DataSourceConfig) => c.id === configId);
+    
+    // 从当前 dataSourceConfigs 状态中查找配置
+    const config = dataSourceConfigs.find((c: DataSourceConfig) => c.id === configId);
 
     if (config) {
       console.log('[DataSourcePanel] Selected config:', config.id, config.name, 'database:', config.database);

@@ -30,6 +30,7 @@ interface ThinkingStep {
   duration_ms?: number;
   tool_name?: string;
   result?: string;  // 工具执行结果
+  sql?: string;     // SQL 语句（execute_sql 工具使用）
 }
 
 export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: ChatPanelProps) {
@@ -47,6 +48,7 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
   const [databaseList, setDatabaseList] = useState<string[]>([]);  // 已连接的数据库列表
   const [isRefreshingDb, setIsRefreshingDb] = useState(false);  // 刷新数据库列表中
   const abortControllerRef = useRef<AbortController | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);  // 聊天容器引用，用于自动滚动
 
   // 刷新数据库列表
   const refreshDatabaseList = async () => {
@@ -91,6 +93,49 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
       }
     }
   }, [selectedTable]);
+
+  // 当 answer 更新时，自动滚动到底部
+  useEffect(() => {
+    if (answer && chatContainerRef.current) {
+      // 使用 setTimeout 确保 DOM 渲染完成后再滚动
+      setTimeout(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTo({
+            top: chatContainerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      }, 100);
+    }
+  }, [answer]);
+
+  // 当 thinkingSteps 更新时，自动滚动到底部
+  useEffect(() => {
+    if (thinkingSteps.length > 0 && chatContainerRef.current) {
+      setTimeout(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTo({
+            top: chatContainerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      }, 100);
+    }
+  }, [thinkingSteps]);
+
+  // 当 queryData 更新时，自动滚动到底部
+  useEffect(() => {
+    if (queryData && chatContainerRef.current) {
+      setTimeout(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTo({
+            top: chatContainerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      }, 100);
+    }
+  }, [queryData]);
 
   // 加载数据库列表
   useEffect(() => {
@@ -200,6 +245,7 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
                       duration_ms: data.duration_ms,
                       tool_name: data.tool_name,
                       result: data.result,  // 保存工具执行结果
+                      sql: data.sql,  // 保存 SQL 语句
                     };
                   }
                   return newSteps;
@@ -211,6 +257,7 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
                     duration_ms: data.duration_ms,
                     tool_name: data.tool_name,
                     result: data.result,  // 保存工具执行结果
+                    sql: data.sql,  // 保存 SQL 语句
                   }];
                 }
               });
@@ -276,7 +323,7 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#0B0D1E] overflow-hidden">
+    <div ref={chatContainerRef} className="h-full flex flex-col bg-[#0B0D1E] overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-white/5 flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -371,8 +418,71 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
                     {/* 展开显示工具执行结果 */}
                     {expandedStepIndex === idx && step.result && (
                       <div className="ml-7 mt-1 p-2 bg-[#0D0F1A] rounded border border-white/5">
-                        <p className="text-xs text-gray-500 mb-1">执行结果:</p>
-                        <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono overflow-x-auto">
+                        {/* 如果有 SQL 语句，先显示 SQL */}
+                        {step.sql && (
+                          <div className="mb-2">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-xs text-green-400">SQL 语句:</p>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  const text = step.sql || '';
+                                  if (text) {
+                                    // 创建临时 textarea 复制
+                                    const textarea = document.createElement('textarea');
+                                    textarea.value = text;
+                                    textarea.style.position = 'fixed';
+                                    textarea.style.opacity = '0';
+                                    document.body.appendChild(textarea);
+                                    textarea.select();
+                                    try {
+                                      document.execCommand('copy');
+                                      alert('复制成功');
+                                    } catch {
+                                      alert('复制失败');
+                                    }
+                                    document.body.removeChild(textarea);
+                                  }
+                                }}
+                                className="text-xs text-gray-500 hover:text-gray-300 px-2 py-0.5 rounded bg-white/5 cursor-pointer"
+                              >
+                                复制
+                              </button>
+                            </div>
+                            <pre className="text-xs text-green-300 whitespace-pre-wrap font-mono overflow-x-auto max-h-32 scrollbar-thin">
+                              {step.sql}
+                            </pre>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-xs text-gray-500">执行结果:</p>
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              const text = step.result || '';
+                              if (text) {
+                                // 创建临时 textarea 复制
+                                const textarea = document.createElement('textarea');
+                                textarea.value = text;
+                                textarea.style.position = 'fixed';
+                                textarea.style.opacity = '0';
+                                document.body.appendChild(textarea);
+                                textarea.select();
+                                try {
+                                  document.execCommand('copy');
+                                  alert('复制成功');
+                                } catch {
+                                  alert('复制失败');
+                                }
+                                document.body.removeChild(textarea);
+                              }
+                            }}
+                            className="text-xs text-gray-500 hover:text-gray-300 px-2 py-0.5 rounded bg-white/5 cursor-pointer"
+                          >
+                            复制
+                          </button>
+                        </div>
+                        <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono overflow-auto max-h-64 scrollbar-thin">
                           {step.result}
                         </pre>
                       </div>
@@ -398,6 +508,21 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
             answer={answer}
             chartConfig={chartConfig}
           />
+        )}
+
+        {/* 如果没有查询数据但有文本答案，也显示答案 */}
+        {(!queryData || !queryData.data || queryData.data.length === 0) && answer && answer.trim() && (
+          <div className="bg-[#13152E] rounded-lg border border-cyan-500/20 p-3 mt-4">
+            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-white/5">
+              <FileText className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-xs font-medium text-cyan-300">回答</span>
+            </div>
+            <div className="prose prose-sm prose-invert max-w-none">
+              <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-wrap">
+                {answer}
+              </p>
+            </div>
+          </div>
         )}
 
         {/* Example Questions */}
@@ -472,7 +597,8 @@ export function ChatPanel({ selectedTable, selectedDatabase, onQueryResult }: Ch
                 handleSend();
               }
             }}
-            className="min-h-[100px] bg-[#13152E] border-white/10 text-gray-300 placeholder-gray-600 resize-none focus:border-purple-500/30 text-sm"
+            disabled={isQuerying}
+            className="min-h-[100px] bg-[#13152E] border-white/10 text-gray-300 placeholder-gray-600 resize-none focus:border-purple-500/30 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <div className="flex justify-between items-center">
             <p className="text-xs text-gray-600">

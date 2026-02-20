@@ -164,15 +164,44 @@ def ui_tool_trace(
     except Exception:
         pass
     
-    events = RUN_UI_EVENTS.get()
-    events.append({
+    # 如果是 get_all_tables_info 工具，简化输出只显示表名列表
+    if tool_name == "get_all_tables_info" and out_brief:
+        try:
+            # 解析输出，提取表名
+            lines = str(out_brief).split('\n')
+            table_names = []
+            for line in lines:
+                # 匹配 "表名: xxx" 格式
+                if "表名:" in line:
+                    table_name = line.split("表名:")[-1].strip()
+                    if table_name and table_name not in table_names:
+                        table_names.append(table_name)
+            
+            if table_names:
+                # 构建简化输出
+                out_brief = f"已找到 {len(table_names)} 张表: {', '.join(table_names)}"
+                logger.info(f"[get_all_tables_info] 简化输出: {out_brief}")
+        except Exception as e:
+            logger.warning(f"简化 get_all_tables_info 输出失败: {e}")
+    
+    # 构建事件数据
+    
+    # 构建事件数据
+    event_data = {
         "kind": "tool_end",
         "name": tool_name,
         "title": f"{description}完成",
         "duration_ms": round(dt, 1),
         "output_brief": _brief(out_brief),
         "ts": time.time()
-    })
+    }
+    
+    # 如果是 execute_sql 工具，将 SQL 语句添加到事件中供前端显示
+    if tool_name == "execute_sql" and "sql" in tool_args:
+        event_data["sql"] = tool_args["sql"]
+    
+    events = RUN_UI_EVENTS.get()
+    events.append(event_data)
     RUN_UI_EVENTS.set(events)
     
     # 将 ui_events 附加到工具返回结果上（如果是 ToolMessage）

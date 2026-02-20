@@ -40,17 +40,25 @@ export const Dashboard: React.FC = () => {
       {/* Header */}
       <div className="h-16 border-b border-white/5 bg-[#0B0D1E] flex items-center px-6 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/')}
-            className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 hover:scale-105 transition-transform cursor-pointer"
-          >
-            <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </button>
-          <h1 className="text-lg font-semibold">
+          {/* Logo 图片 */}
+          <div className="flex items-center gap-2">
+            <img 
+              src="/logo.png" 
+              alt="Logo" 
+              className="w-10 h-10 rounded-xl object-contain shadow-lg"
+            />
+            <div className="flex flex-col">
+              <h1 className="text-lg font-semibold leading-tight">
+                <span className="bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">
+                  SQL Agent
+                </span>
+              </h1>
+              <span className="text-[10px] text-gray-400 -mt-0.5">云南水利水电职业学院</span>
+            </div>
+          </div>
+          <h1 className="text-lg font-semibold ml-1">
             <span className="bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">
-              SQL Agent 数据分析系统
+              智能数据分析平台
             </span>
           </h1>
         </div>

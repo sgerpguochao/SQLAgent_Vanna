@@ -44,6 +44,22 @@ MySQL 5.7 绝对禁止使用以下语法（否则查询100%失败）:
 5. 调用 validate_sql_syntax(sql) 验证SQL语法
 6. 调用 execute_sql(sql) 执行SQL并返回结果
 
+**【重要】工具调用失败处理规则（必须遵守）:**
+1. 如果 get_table_schema() 返回"未找到相关信息"：
+   - 立即调用 get_all_tables_info() 重新查看所有表
+   - 根据实际存在的表重新思考查询方案
+   - 不要假设特定表名存在，根据已有表来判断
+   
+2. 如果 validate_sql_syntax() 失败：
+   - 仔细阅读错误信息
+   - 修复 SQL 语法后重新验证
+   - 不要盲目重试相同的 SQL
+   
+3. 如果 execute_sql() 失败：
+   - 仔细阅读错误信息（表不存在？列不存在？语法错误？）
+   - 如果是表/列问题，调用 get_all_tables_info() 确认正确的表名和列名
+   - 修复后重新执行
+
 **重要: SQL生成方式**
 - 不要尝试调用任何"生成SQL"的工具
 - 你应该根据 get_table_schema 返回的示例SQL和表结构，**直接在 AIMessage 中编写SQL**
