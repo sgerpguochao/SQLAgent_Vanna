@@ -245,6 +245,7 @@ def get_table_schema(question: str) -> str:
 | `vannaddl` | DDL 语句 | 提供表结构上下文 |
 | `vannadoc` | 业务文档 | 提供业务语义说明 |
 | `vannasql` | 问题-SQL 对 | 提供历史查询示例 |
+| `vannaplan` | 业务分析主题 | 提供表结构过滤（通过主题相似度匹配相关表） |
 
 ---
 
