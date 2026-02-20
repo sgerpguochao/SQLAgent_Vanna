@@ -515,3 +515,129 @@ while (true) {
 | `backend/vanna/src/Improve/tools/rag_tools.py` | RAG 工具添加 db_name 参数 |
 | `backend/vanna/src/vanna/milvus/milvus_vector.py` | 向量检索添加 db_name 过滤 |
 | `backend/playgroud/test_chat_with_db_filter.py` | 测试脚本 |
+
+---
+
+## 九、数据库连接持久化（2026-02-20 新增）
+
+### 9.1 功能说明
+
+为解决后端重启后数据库连接配置丢失的问题，新增了数据库连接持久化功能：
+
+1. **文件持久化**: 数据库连接配置保存到 `db_connections.json` 文件
+2. **自动加载**: 启动时自动从文件加载已保存的数据库连接配置
+3. **新增接口**: `/api/v1/database/list` 获取已连接的数据库列表
+4. **前端适配**: 前端各面板改为从后端 API 获取数据库列表
+
+### 9.2 修改的文件
+
+| 文件 | 修改内容 |
+|------|---------|
+| `backend/vanna/api_server.py` | 添加持久化函数和 `/api/v1/database/list` 接口 |
+| `frontend/src/services/api.ts` | 添加 `getConnectedDatabases` 方法 |
+| `frontend/src/components/ChatPanel.tsx` | 添加数据库选择下拉框和刷新按钮 |
+| `frontend/src/components/TrainingDataPanel.tsx` | 改为从后端 API 获取数据库列表 |
+| `.gitignore` | 忽略敏感文件 |
+
+### 9.3 详细修改
+
+#### 9.3.1 api_server.py 持久化函数
+
+```python
+import os
+import json
+
+# 数据库连接配置持久化文件路径
+DB_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db_connections.json")
+
+def load_db_connections():
+    """从文件加载数据库连接配置"""
+    global db_connection_configs
+    if os.path.exists(DB_CONFIG_FILE):
+        try:
+            with open(DB_CONFIG_FILE, 'r') as f:
+                db_connection_configs = json.load(f)
+            logger.info(f"Loaded {len(db_connection_configs)} database connection configs from file")
+        except Exception as e:
+            logger.warning(f"Failed to load db connections: {e}")
+            db_connection_configs = {}
+
+def save_db_connections():
+    """保存数据库连接配置到文件"""
+    try:
+        with open(DB_CONFIG_FILE, 'w') as f:
+            json.dump(db_connection_configs, f)
+        logger.info(f"Saved {len(db_connection_configs)} database connection configs to file")
+    except Exception as e:
+        logger.warning(f"Failed to save db connections: {e}")
+```
+
+#### 9.3.2 新增接口 /api/v1/database/list
+
+```python
+@app.get("/api/v1/database/list")
+async def get_connected_databases():
+    """
+    获取已连接的数据库列表
+
+    Returns:
+        已连接的数据库名称列表
+    """
+    return {
+        "success": True,
+        "databases": list(db_connection_configs.keys())
+    }
+```
+
+#### 9.3.3 前端 API 服务
+
+```typescript
+// frontend/src/services/api.ts
+async getConnectedDatabases(): Promise<{ success: boolean; databases: string[] }> {
+  const response = await apiClient.get('/api/v1/database/list');
+  return response;
+}
+```
+
+### 9.4 接口文档
+
+#### 9.4.1 获取已连接数据库列表
+
+**接口地址**: `GET /api/v1/database/list`
+
+**响应参数**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| databases | array | 已连接的数据库名称列表 |
+
+**响应示例**:
+```json
+{
+    "success": true,
+    "databases": ["ai_sales_data", "telco_db"]
+}
+```
+
+### 9.5 前端修改说明
+
+#### 9.5.1 ChatPanel 数据库选择下拉框
+
+- 位置: 对话输入框上方
+- 功能:
+  - 显示已连接的数据库下拉列表
+  - 右侧添加刷新按钮，可手动刷新数据库列表
+  - 选中数据库后自动携带 `db_name` 参数发送对话请求
+- 数据源: 优先从 `/api/v1/database/list` 获取，失败后降级到 localStorage
+
+#### 9.5.2 TrainingDataPanel 数据库选择
+
+- 修改: `loadDatabaseList` 函数改为 async，优先从后端 API 获取
+- 降级处理: 如果后端 API 失败，自动降级到从 localStorage 获取
+
+### 9.6 注意事项
+
+1. **敏感信息**: `db_connections.json` 包含数据库密码，已添加到 `.gitignore` 不会被提交到 GitHub
+2. **首次使用**: 需要先在前端连接一次数据库，配置才会被持久化
+3. **多环境部署**: 不同环境的数据库连接配置需要单独维护
