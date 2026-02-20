@@ -407,41 +407,92 @@ langchain-openai==1.0.2
 
 **文件**: `backend/vanna/src/Improve/tools/database_tools.py`
 
-**代码位置**: 第 20-112 行
+**代码位置**: 第 136-230 行
 
-**功能**: 获取数据库中所有表的完整信息（表名、列名、数据类型、注释等）
+**功能**: 获取数据库中表的信息（支持 Plan 过滤和关键字过滤）
 
-**当前问题**:
-- **无条件返回所有表**：无论用户问题是什么，都返回完整的表结构
-- **数据量大**：大型数据库可能有上百张表，返回内容过长
-- **LLM 难以处理**：过长的上下文会增加 LLM 的处理难度和幻觉风险
+**优化后的特性**:
+- **支持问题过滤**: 可通过 `question` 参数过滤相关表
+- **Plan 过滤优先**: 通过 vannaplan 检索相似度 >= 0.75 的表
+- **关键字过滤备选**: Plan 过滤无结果时，使用关键字匹配
+- **交集过滤**: 过滤结果只返回数据库中实际存在的表
 
 **当前代码逻辑**:
 
 ```python
 @tool
-def get_all_tables_info() -> str:
-    """直接从MySQL数据库获取所有表及其列信息"""
-    
-    vn = get_vanna_client()
-    
-    # 1. 查询所有表（无条件）
-    tables_query = """
-    SELECT TABLE_NAME, TABLE_COMMENT
-    FROM information_schema.TABLES 
-    WHERE TABLE_SCHEMA = '{db_name}'
-    ORDER BY TABLE_NAME
-    """
+def get_all_tables_info(question: str = "") -> str:
+    """获取表信息，支持 Plan 过滤和关键字过滤"""
+
+    # 1. 查询所有表
     tables_df = vn.run_sql(tables_query)
-    
-    # 2. 遍历每个表，获取列信息（全部返回）
+    all_table_names = tables_df['TABLE_NAME'].tolist()
+
+    # 2. 如果提供了问题，进行表过滤
+    if question:
+        # 2.1 优先尝试 Plan 过滤
+        plan_filtered = _filter_tables_by_plan(vn, db_name, question, all_table_names)
+        if plan_filtered:
+            tables_df = tables_df[tables_df['TABLE_NAME'].isin(plan_filtered)]
+        else:
+            # 2.2 Plan 无结果，使用关键字过滤
+            keywords = _extract_keywords(question)
+            if keywords:
+                filtered_df = _filter_tables_by_keywords(tables_df, keywords)
+                tables_df = filtered_df
+
+    # 3. 返回过滤后的表信息
     for _, table_row in tables_df.iterrows():
-        # ... 获取所有表的详细列信息
+        # ... 获取列信息
 ```
 
 ---
 
-### 7.2 get_table_schema 工具
+### 7.2 辅助函数
+
+**文件**: `backend/vanna/src/Improve/tools/database_tools.py`
+
+#### 7.2.1 _filter_tables_by_plan
+
+**功能**: 通过 vannaplan 检索相关表并过滤
+
+```python
+def _filter_tables_by_plan(vn, db_name: str, question: str, all_tables: list) -> list:
+    """
+    通过 vannaplan 检索相关表名并与 all_tables 取交集
+    - 从 vannaplan 集合检索相似度 >= 0.75 的 top5 记录
+    - 提取 tables 字段中的表名（按逗号分割）
+    - 与 all_tables 取交集，确保只返回存在的表
+    """
+```
+
+#### 7.2.2 _extract_keywords
+
+**功能**: 从问题中提取关键词
+
+```python
+def _extract_keywords(question: str) -> list:
+    """
+    移除停用词后返回关键词列表
+    停用词: 的、是、在、有、和、与、或、了、一个、什么、怎么、如何、请、查询、获取、找出
+    """
+```
+
+#### 7.2.3 _filter_tables_by_keywords
+
+**功能**: 通过关键字匹配过滤表
+
+```python
+def _filter_tables_by_keywords(tables_df: pd.DataFrame, keywords: list) -> pd.DataFrame:
+    """
+    匹配表名或表注释中包含关键词的表
+    如果没有匹配，返回前 10 个表
+    """
+```
+
+---
+
+### 7.3 get_table_schema 工具
 
 **文件**: `backend/vanna/src/Improve/tools/rag_tools.py`
 
@@ -471,7 +522,7 @@ def get_table_schema(question: str) -> str:
 
 ---
 
-### 7.3 Milvus 向量检索实现
+### 7.4 Milvus 向量检索实现
 
 **文件**: `backend/vanna/src/vanna/milvus/milvus_vector.py`
 
@@ -498,64 +549,53 @@ def get_related_ddl(self, question: str, **kwargs) -> list:
 
 ---
 
-## 八、优化方案
+## 八、优化方案（已完成）
 
-### 8.1 优化目标
+### 8.1 优化目标 ✅ 已完成
 
-1. **精准检索**：只返回与问题真正相关的表和文档
-2. **减少上下文**：降低 LLM 处理压力和幻觉风险
-3. **多路召回**：结合向量检索 + 关键词匹配
-4. **可配置**：支持根据问题复杂度动态调整返回数量
+1. **精准检索**：只返回与问题真正相关的表和文档 ✅
+2. **减少上下文**：降低 LLM 处理压力和幻觉风险 ✅
+3. **多路召回**：结合向量检索 + 关键词匹配 ✅
+4. **可配置**：支持根据问题复杂度动态调整返回数量 ✅
 
 ---
 
-### 8.2 方案一：get_all_tables_info 增强（推荐）
+### 8.2 方案一：get_all_tables_info 增强 ✅ 已实现
 
-**思路**: 增加问题参数，根据关键词过滤相关表
+**状态**: 已完成实现
 
-**修改文件**:
+**实现文件**:
 - `backend/vanna/src/Improve/tools/database_tools.py`
+- `backend/vanna/src/vanna/milvus/milvus_vector.py`
 
-**修改代码**:
+**实现功能**:
+- 支持 `question` 参数过滤相关表
+- **Plan 过滤优先**: 通过 vannaplan 检索相似度 >= 0.75 的表
+- **关键字过滤备选**: Plan 过滤无结果时，使用关键字匹配
+- 与 all_tables 取交集，确保只返回存在的表
+
+**核心代码**:
 
 ```python
 @tool
 def get_all_tables_info(question: str = "") -> str:
-    """获取数据库表信息，支持根据问题过滤相关表
-    
-    Args:
-        question: 用户问题（可选），用于过滤相关表
-        
-    Returns:
-        表结构信息
-    """
-    
-    vn = get_vanna_client()
-    
     # 1. 获取所有表
-    tables_query = """
-    SELECT TABLE_NAME, TABLE_COMMENT
-    FROM information_schema.TABLES 
-    WHERE TABLE_SCHEMA = '{db_name}'
-    """
-    all_tables = vn.run_sql(tables_query)
-    
-    # 2. 如果提供了问题，进行关键词过滤
+    tables_df = vn.run_sql(tables_query)
+    all_table_names = tables_df['TABLE_NAME'].tolist()
+
+    # 2. 如果提供了问题，进行表过滤
     if question:
-        # 提取关键词（表名、列名）
-        keywords = _extract_keywords(question)
-        
-        # 过滤相关表
-        related_tables = _filter_related_tables(all_tables, keywords)
-        
-        if related_tables.empty:
-            return "未找到与问题相关的表"
-        
-        tables_df = related_tables
-    else:
-        tables_df = all_tables
-    
-    # 3. 获取每个表的列信息
+        # 2.1 优先尝试 Plan 过滤
+        plan_filtered = _filter_tables_by_plan(vn, db_name, question, all_table_names)
+        if plan_filtered:
+            tables_df = tables_df[tables_df['TABLE_NAME'].isin(plan_filtered)]
+        else:
+            # 2.2 Plan 无结果，使用关键字过滤
+            keywords = _extract_keywords(question)
+            if keywords:
+                filtered_df = _filter_tables_by_keywords(tables_df, keywords)
+                tables_df = filtered_df
+```
     for _, table_row in tables_df.iterrows():
         # ... 现有逻辑
 ```
@@ -844,17 +884,27 @@ if not re.match(r'^[a-zA-Z0-9_]+$', kw):
 | 追踪中间件 | `trace_middleware.py` | - |
 | UI 中间件 | `ui_events_middleware.py` | - |
 
-### 现有问题
+### 现有问题 ✅ 已解决
 
-| 工具 | 问题 |
-|------|------|
-| `get_all_tables_info` | 无条件返回所有表，信息量过大 |
-| `get_table_schema` | 仅依赖向量检索，可能遗漏相关内容 |
+| 工具 | 问题 | 状态 |
+|------|------|------|
+| `get_all_tables_info` | 无条件返回所有表，信息量过大 | ✅ 已解决（支持 Plan/关键字过滤） |
+| `get_table_schema` | 仅依赖向量检索，可能遗漏相关内容 | 部分解决 |
 
-### 优化方案效果
+### 优化方案效果 ✅ 已实现
 
 | 方案 | 效果 |
 |------|------|
-| 关键词过滤 | 减少无关表信息，只返回相关表 |
+| Plan 过滤 | 通过 vannaplan 检索相似表，精准度高 |
+| 关键字过滤 | Plan 无结果时的备选方案，提高召回率 |
 | 多路召回 | 向量 + 关键词结合，提高召回率 |
 | 动态 n_results | 根据问题复杂度调整返回数量 |
+
+### 核心新增文件
+
+| 文件 | 说明 |
+|------|------|
+| `backend/vanna/src/vanna/milvus/milvus_vector.py` | 新增 `get_related_plan_tables` 方法 |
+| `backend/vanna/src/Improve/tools/database_tools.py` | 新增过滤辅助函数 |
+| `backend/playground/test_get_all_tables.py` | 表过滤功能测试脚本 |
+| `backend/playground/test_chat_stream.py` | 对话流程测试脚本 |
