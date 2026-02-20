@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 import threading
 import time
 import pandas as pd
+import re
 from langchain.tools import tool  # type: ignore
 
 # 导入共享上下文（统一管理）
@@ -16,10 +17,133 @@ from ..shared import get_vanna_client, set_last_query_result
 
 _sql_execution_lock = threading.Lock()
 
+
+def _extract_keywords(question: str) -> list:
+    """
+    从问题中提取关键词
+
+    Args:
+        question: 用户问题
+
+    Returns:
+        list: 关键词列表
+    """
+    if not question:
+        return []
+
+    # 移除常见停用词
+    stop_words = {'的', '是', '在', '有', '和', '与', '或', '了', '一个', '什么', '怎么', '如何', '请', '查询', '获取', '找出'}
+
+    # 简单分词（按空格和标点分割）
+    words = re.split(r'[\s,，。、！？\.\-\_\/]+', question)
+    words = [w.strip() for w in words if w.strip()]
+
+    # 过滤停用词和短词
+    keywords = [w for w in words if w not in stop_words and len(w) >= 2]
+
+    return keywords
+
+
+def _filter_tables_by_keywords(tables_df: pd.DataFrame, keywords: list) -> pd.DataFrame:
+    """
+    通过关键字过滤表
+
+    Args:
+        tables_df: 包含所有表的 DataFrame
+        keywords: 关键词列表
+
+    Returns:
+        pd.DataFrame: 过滤后的表
+    """
+    if not keywords or tables_df.empty:
+        return tables_df
+
+    # 将关键词转为小写进行匹配
+    keywords_lower = [k.lower() for k in keywords]
+
+    def matches_keyword(table_name: str, table_comment: str) -> bool:
+        """检查表名或表注释是否包含关键词"""
+        table_lower = table_name.lower()
+        comment_lower = (table_comment or "").lower()
+
+        for kw in keywords_lower:
+            if kw in table_lower or kw in comment_lower:
+                return True
+        return False
+
+    # 过滤匹配的表
+    mask = tables_df.apply(
+        lambda row: matches_keyword(row['TABLE_NAME'], row['TABLE_COMMENT']),
+        axis=1
+    )
+
+    filtered_df = tables_df[mask]
+
+    # 如果没有匹配，返回前10个表
+    if filtered_df.empty:
+        return tables_df.head(10)
+
+    return filtered_df
+
+
+def _filter_tables_by_plan(vn, db_name: str, question: str, all_tables: list) -> list:
+    """
+    通过 vannaplan 检索相关表名并与 all_tables 取交集
+
+    Args:
+        vn: Vanna 客户端
+        db_name: 数据库名称
+        question: 用户问题
+        all_tables: 所有表名列表
+
+    Returns:
+        list: 过滤后的表名列表（优先使用 plan 过滤）
+    """
+    if not question or not db_name or not all_tables:
+        return []
+
+    try:
+        # 调用 vannaplan 检索方法，获取相似度 >= 0.75 的 top5 相关表
+        related_tables = vn.get_related_plan_tables(
+            question=question,
+            db_name=db_name,
+            threshold=0.75,
+            top_k=5
+        )
+
+        if not related_tables:
+            logger.info("Plan 过滤未返回相关表，将使用关键字过滤")
+            return []
+
+        # 将 all_tables 转为小写映射
+        all_tables_lower = {t.lower(): t for t in all_tables}
+
+        # 取交集（按大小写不敏感）
+        filtered_tables = []
+        for table in related_tables:
+            table_lower = table.lower()
+            if table_lower in all_tables_lower:
+                filtered_tables.append(all_tables_lower[table_lower])
+
+        logger.info(f"Plan 过滤结果: {len(filtered_tables)}/{len(related_tables)} 个表匹配")
+
+        return filtered_tables
+
+    except Exception as e:
+        logger.warning(f"Plan 过滤失败: {e}，将使用关键字过滤")
+        return []
+
 @tool
-def get_all_tables_info() -> str:
+def get_all_tables_info(question: str = "") -> str:
     """直接从MySQL数据库获取所有表及其列信息
-    
+
+    支持两种过滤方式（优先使用 Plan 过滤，其次是关键字过滤）：
+    1. Plan 过滤：通过 vannaplan 检索相似度 >= 0.85 的 top5 记录，提取关联表
+    2. 关键字过滤：从问题中提取关键词，匹配表名或表注释
+
+    Args:
+        question: 用户问题（可选），用于过滤相关表
+
     Returns:
         所有表的结构信息（表名、列名、数据类型、注释）
     """
@@ -31,13 +155,13 @@ def get_all_tables_info() -> str:
         db_query = "SELECT DATABASE()"
         db_result = vn.run_sql(db_query)
         db_name = db_result.iloc[0, 0]
-        
+
         # 查询所有表的详细信息
         tables_query = f"""
-        SELECT 
+        SELECT
             TABLE_NAME,
             TABLE_COMMENT
-        FROM information_schema.TABLES 
+        FROM information_schema.TABLES
         WHERE TABLE_SCHEMA = '{db_name}'
         ORDER BY TABLE_NAME
         """
@@ -47,23 +171,61 @@ def get_all_tables_info() -> str:
         #     def run_sql(self, sql: str, **kwargs) -> pd.DataFrame:
         #         """Run a SQL query on the connected database."""
         #         raise Exception("You need to connect to a database first...")
-        
+
         tables_df = vn.run_sql(tables_query)
-        
+
         if tables_df.empty:
             return f"Database {db_name} has no tables"
-        
+
+        # 保存所有表名列表（用于过滤）
+        all_table_names = tables_df['TABLE_NAME'].tolist()
+
+        # 如果提供了问题，进行表过滤
+        filtered_table_names = None
+        filter_method = None
+
+        if question:
+            # 1. 优先尝试 Plan 过滤
+            plan_filtered = _filter_tables_by_plan(vn, db_name, question, all_table_names)
+            if plan_filtered:
+                filtered_table_names = plan_filtered
+                filter_method = "Plan"
+                logger.info(f"使用 Plan 过滤，匹配到 {len(filtered_table_names)} 个表")
+            else:
+                # 2. Plan 过滤无结果，使用关键字过滤
+                keywords = _extract_keywords(question)
+                if keywords:
+                    filtered_df = _filter_tables_by_keywords(tables_df, keywords)
+                    filtered_table_names = filtered_df['TABLE_NAME'].tolist()
+                    filter_method = "关键字"
+                    logger.info(f"使用关键字过滤，匹配到 {len(filtered_table_names)} 个表")
+
+        # 应用过滤
+        if filtered_table_names is not None and filtered_table_names:
+            # 过滤后的表（确保只包含存在的表）
+            tables_df = tables_df[tables_df['TABLE_NAME'].isin(filtered_table_names)]
+            if tables_df.empty:
+                # 过滤后为空，回退到所有表
+                tables_df = vn.run_sql(tables_query)
+                filter_method = None
+        else:
+            filter_method = None
+
         result_parts = [f"数据库: {db_name}"]
-        result_parts.append(f"表数量: {len(tables_df)}\n")
-        
+        result_parts.append(f"表数量: {len(tables_df)}")
+        if filter_method:
+            result_parts.append(f"过滤方式: {filter_method}\n")
+        else:
+            result_parts.append("")
+
         # 遍历每个表，获取列信息
         for _, table_row in tables_df.iterrows():
             table_name = table_row['TABLE_NAME']
             table_comment = table_row['TABLE_COMMENT'] or '无描述'
-            
+
             # 获取表的列信息
             columns_query = f"""
-            SELECT 
+            SELECT
                 COLUMN_NAME,
                 COLUMN_TYPE,
                 IS_NULLABLE,

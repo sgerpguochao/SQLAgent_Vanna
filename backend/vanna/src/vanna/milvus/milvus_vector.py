@@ -413,6 +413,69 @@ class Milvus_VectorStore(VannaBase):
             list_doc.append(doc["entity"]["doc"])
         return list_doc
 
+    def get_related_plan_tables(self, question: str, db_name: str, **kwargs) -> list:
+        """
+        从 vannaplan 集合中检索与问题相关的表名
+
+        Args:
+            question: 用户问题
+            db_name: 数据库名称
+            threshold: 相似度阈值，默认 0.75（高于此阈值认为相关）
+            top_k: 返回数量，默认 5
+
+        Returns:
+            list: 相关的表名列表（去重，按大小写不敏感）
+        """
+        threshold = kwargs.get("threshold", 0.75)
+        top_k = kwargs.get("top_k", 5)
+
+        search_params = {
+            "metric_type": self.metric_type,
+            "params": {"nprobe": 128},
+        }
+        embeddings = self.embedding_function.encode_queries([question])
+
+        # 先按 db_name 过滤，再进行向量搜索
+        filter_expr = f'db_name == "{db_name}"'
+
+        res = self.milvus_client.search(
+            collection_name="vannaplan",
+            anns_field="vector",
+            data=embeddings,
+            filter=filter_expr,
+            limit=top_k,
+            output_fields=["topic", "tables", "db_name"],
+            search_params=search_params
+        )
+
+        res = res[0]
+
+        # 用于存储去重后的表名（按小写去重，保持原始大小写）
+        tables_set = {}
+
+        for doc in res:
+            # 获取相似度分数（distance 对于 COSINE 是 0-1，越接近 1 越相似）
+            distance = doc.get("distance", 0)
+
+            # 只返回达到阈值的结果
+            if distance >= threshold:
+                tables_str = doc["entity"].get("tables", "")
+                if tables_str:
+                    # 按逗号分割表名
+                    table_list = [t.strip() for t in tables_str.split(",") if t.strip()]
+                    for table in table_list:
+                        # 按小写去重，保留第一个遇到的大小写形式
+                        table_lower = table.lower()
+                        if table_lower not in tables_set:
+                            tables_set[table_lower] = table
+
+        # 如果没有达到阈值的记录，返回空列表（让关键字过滤作为备选）
+        if not tables_set:
+            logger.info(f"没有达到阈值 {threshold} 的记录，将使用关键字过滤")
+
+        # 返回去重后的表名列表（保持原始大小写）
+        return list(tables_set.values())
+
     def remove_training_data(self, id: str, **kwargs) -> bool:
         if id.endswith("-sql"):
             self.milvus_client.delete(collection_name="vannasql", ids=[id])
