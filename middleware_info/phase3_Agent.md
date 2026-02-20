@@ -523,29 +523,82 @@ def get_table_schema(question: str) -> str:
 
 ---
 
-### 7.4 Milvus 向量检索实现
+### 7.4 Milvus 向量检索实现（已优化）
 
 **文件**: `backend/vanna/src/vanna/milvus/milvus_vector.py`
 
-**代码位置**: 第 281-330 行
+#### 7.4.1 get_related_ddl（已优化）
 
 ```python
 def get_related_ddl(self, question: str, **kwargs) -> list:
-    # 1. 将问题转为向量
-    embeddings = self.embedding_function.encode_queries([question])
-    
-    # 2. 向量相似度搜索
-    res = self.milvus_client.search(
-        collection_name="vannaddl",
-        anns_field="vector",
-        data=embeddings,
-        limit=self.n_results,  # 默认 5
-        output_fields=["ddl"],
-        search_params=search_params
-    )
-    
-    # 3. 返回结果
-    return [doc["entity"]["ddl"] for doc in res[0]]
+    """
+    获取与问题相关的 DDL
+
+    Args:
+        question: 用户问题
+        db_name: 数据库名称（用于过滤）
+        threshold: 相似度阈值，默认 0.5
+        top_k: 返回数量，默认 5
+    """
+    # 支持 db_name 过滤、阈值 0.5、topk=5
+```
+
+#### 7.4.2 get_related_documentation（已优化）
+
+```python
+def get_related_documentation(self, question: str, **kwargs) -> list:
+    """
+    获取与问题相关的文档
+
+    Args:
+        question: 用户问题
+        db_name: 数据库名称（用于过滤）
+        top_k: 返回数量，默认 5
+    """
+    # 支持 db_name 过滤
+```
+
+#### 7.4.3 get_similar_question_sql（已优化）
+
+```python
+def get_similar_question_sql(self, question: str, **kwargs) -> list:
+    """
+    获取与问题相似的历史查询 SQL
+
+    Args:
+        question: 用户问题
+        db_name: 数据库名称（用于过滤）
+        top_k: 返回数量，默认 5
+    """
+    # 支持 db_name 过滤
+```
+
+#### 7.4.4 _get_ddl_by_keywords（新增）
+
+```python
+def _get_ddl_by_keywords(self, keywords: list, db_name: str = "", **kwargs) -> list:
+    """
+    通过关键词检索 DDL
+
+    Args:
+        keywords: 关键词列表
+        db_name: 数据库名称（用于过滤）
+        top_k: 返回数量，默认 5
+    """
+```
+
+#### 7.4.5 _get_doc_by_keywords（新增）
+
+```python
+def _get_doc_by_keywords(self, keywords: list, db_name: str = "", **kwargs) -> list:
+    """
+    通过关键词检索文档
+
+    Args:
+        keywords: 关键词列表
+        db_name: 数据库名称（用于过滤）
+        top_k: 返回数量，默认 5
+    """
 ```
 
 ---
@@ -656,84 +709,69 @@ def _filter_related_tables(tables_df: pd.DataFrame, keywords: List[str]) -> pd.D
 
 ---
 
-### 8.3 方案二：get_table_schema 多路召回（推荐）
+### 8.3 方案二：get_table_schema 多路召回 ✅ 已实现
 
-**思路**: 结合向量检索 + 关键词匹配 + 表名召回
+**状态**: 已完成实现
 
-**修改文件**:
+**优化内容**:
+- 结合向量检索 + 关键词匹配
+- 支持 db_name 过滤
+- 相似度阈值 0.5，top_k=5
+
+**实现文件**:
 - `backend/vanna/src/Improve/tools/rag_tools.py`
 
-**修改代码**:
+**核心代码**:
 
 ```python
 @tool
 def get_table_schema(question: str) -> str:
-    """获取与问题相关的完整RAG信息（优化版：多路召回）"""
-    
+    """获取与问题相关的完整RAG信息（多路召回）"""
+
     vn = get_vanna_client()
-    
-    # 1. 提取关键词
+
+    # 获取当前数据库名
+    db_name = vn.run_sql("SELECT DATABASE()").iloc[0, 0]
+
+    # 提取关键词
     keywords = _extract_keywords(question)
-    
-    # 2. 多路召回
-    result_parts = []
-    
-    # 2.1 向量检索 DDL
-    ddl_list = vn.get_related_ddl(question, n_results=5)
-    
-    # 2.2 关键词增强：补充相关表
+
+    # 1. 向量检索 DDL（阈值 0.5，topk=5，按 db_name 过滤）
+    ddl_list = vn.get_related_ddl(
+        question,
+        db_name=db_name,
+        threshold=0.5,
+        top_k=5
+    )
+
+    # 2. 关键词增强
     if keywords:
-        keyword_ddl_list = _get_ddl_by_keywords(vn, keywords)
-        # 合并去重
+        keyword_ddl_list = vn._get_ddl_by_keywords(keywords, db_name=db_name, top_k=5)
         ddl_list = _merge_and_deduplicate(ddl_list, keyword_ddl_list)
-    
-    if ddl_list:
-        result_parts.append("相关表结构 (DDL):")
-        result_parts.append("\n".join(ddl_list[:5]))  # 最多 5 个
-    
-    # 2.3 向量检索文档
-    doc_list = vn.get_related_documentation(question, n_results=5)
-    
-    # 2.4 关键词增强
+
+    # 3. 向量检索文档（按 db_name 过滤）
+    doc_list = vn.get_related_documentation(question, db_name=db_name, top_k=5)
+
+    # 4. 关键词增强
     if keywords:
-        keyword_doc_list = _get_doc_by_keywords(vn, keywords)
+        keyword_doc_list = vn._get_doc_by_keywords(keywords, db_name=db_name, top_k=5)
         doc_list = _merge_and_deduplicate(doc_list, keyword_doc_list)
-    
-    if doc_list:
-        result_parts.append("\n\n业务文档说明:")
-        for i, doc in enumerate(doc_list[:5], 1):
-            result_parts.append(f"\n[文档{i}]\n{doc}")
-    
-    # 2.5 历史 SQL 检索
-    similar_pairs = vn.get_similar_question_sql(question, n_results=3)
-    if similar_pairs:
-        result_parts.append("\n\n历史相似查询:")
-        for i, pair in enumerate(similar_pairs[:3], 1):
-            result_parts.append(f"\n[示例{i}]\n问题: {pair.get('question')}\nSQL: {pair.get('sql')}")
-    
-    return "\n".join(result_parts) if result_parts else "未找到相关信息"
 
+    # 5. 历史 SQL 检索（按 db_name 过滤）
+    similar_pairs = vn.get_similar_question_sql(question, db_name=db_name, top_k=3)
+```
 
-def _extract_keywords(question: str) -> List[str]:
-    """从问题中提取关键词"""
-    import re
-    words = re.findall(r'[a-zA-Z_]+', question.lower())
-    stop_words = {'the', 'a', 'an', 'is', 'are', 'what', 'which', 'how', 'many', 'much'}
-    return [w for w in words if w not in stop_words and len(w) > 2]
+---
 
+### 8.4 优化总结
 
-def _get_ddl_by_keywords(vn, keywords: List[str]) -> List[str]:
-    """根据关键词从 Milvus 查询相关 DDL"""
-    results = []
-    for kw in keywords:
-        try:
-            # 确保 kw 安全（只允许英文数字下划线）
-            if not re.match(r'^[a-zA-Z0-9_]+$', kw):
-                continue
-            res = vn.milvus_client.query(
-                collection_name="vannaddl",
-                filter=f'ddl like "%{kw}%"',
-                output_fields=["ddl"],
+| 方法 | 优化内容 |
+|------|----------|
+| `get_related_ddl` | 添加 db_name 过滤、阈值 0.5、topk=5 |
+| `get_related_documentation` | 添加 db_name 过滤 |
+| `get_similar_question_sql` | 添加 db_name 过滤 |
+| `_get_ddl_by_keywords` | 新增，支持 db_name 过滤 |
+| `_get_doc_by_keywords` | 新增，支持 db_name 过滤 |
                 limit=3
             )
             results.extend([r["ddl"] for r in res])
